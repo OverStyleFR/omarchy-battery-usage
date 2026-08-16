@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Sample battery power in both directions, print and persist
+# "<epoch> <discharge-watts> <charge-watts>".
+#
+# Discharge and charge are kept separate. Consumption statistics integrate
+# only the discharge column, while the graph can show charging in another
+# color. AC idle is not recorded.
+#
+# Samples are stored in a SQLite database (~/.local/state/tomv.battery-usage/power.db)
+# so the web dashboard and the bar's graph can query indexed ranges without
+# parsing a growing text log. The bar invokes this script every second and
+# reads the live sample from stdout; history is backfilled separately via
+# battery-power-history.
+
+set -euo pipefail
+shopt -s nullglob
+
+discharge_microwatts=0
+charge_microwatts=0
+found=false
+record_sample=false
+power_supply_root="${BATTERY_POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
+
+for battery in "$power_supply_root"/BAT*; do
+  [[ -d "$battery" ]] || continue
+  found=true
+
+  status=""
+  [[ -r "$battery/status" ]] && status="$(<"$battery/status")"
+  battery_microwatts=0
+  if [[ -r "$battery/power_now" ]]; then
+    value="$(<"$battery/power_now")"
+    value="${value#-}"
+    battery_microwatts="$value"
+  elif [[ -r "$battery/current_now" && -r "$battery/voltage_now" ]]; then
+    current="$(<"$battery/current_now")"
+    voltage="$(<"$battery/voltage_now")"
+    current="${current#-}"
+    voltage="${voltage#-}"
+    battery_microwatts=$((current * voltage / 1000000))
+  else
+    continue
+  fi
+
+  if [[ "$status" == "Charging" ]]; then
+    charge_microwatts=$((charge_microwatts + battery_microwatts))
+    record_sample=true
+  elif [[ "$status" == "Discharging" || "$status" == "" ]]; then
+    # A missing status keeps the legacy fallback and counts as discharge.
+    discharge_microwatts=$((discharge_microwatts + battery_microwatts))
+    record_sample=true
+  fi
+done
+
+"$found" || exit 0
+
+read -r discharge_watts charge_watts < <(
+  awk -v discharge="$discharge_microwatts" -v charge="$charge_microwatts" \
+    'BEGIN { printf "%.1f %.1f\n", discharge / 1000000, charge / 1000000 }'
+)
+
+db="$HOME/.local/state/tomv.battery-usage/power.db"
+mkdir -p "$(dirname "$db")"
+
+epoch="$(date +%s)"
+if "$record_sample"; then
+  sqlite3 "$db" "
+    PRAGMA journal_mode=WAL;
+    CREATE TABLE IF NOT EXISTS samples (
+      epoch INTEGER PRIMARY KEY,
+      discharge_watts REAL NOT NULL,
+      charge_watts REAL NOT NULL
+    );
+    INSERT INTO samples(epoch, discharge_watts, charge_watts)
+      VALUES($epoch, $discharge_watts, $charge_watts)
+      ON CONFLICT(epoch) DO UPDATE SET
+        discharge_watts = excluded.discharge_watts,
+        charge_watts = excluded.charge_watts;
+  " >/dev/null 2>&1 || echo "battery-power-sample: failed to store sample" >&2
+fi
+
+printf '%s %s %s\n' "$epoch" "$discharge_watts" "$charge_watts"

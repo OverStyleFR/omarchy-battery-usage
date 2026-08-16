@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Print the most recent N recorded battery samples as
+# "<epoch> <discharge-watts> <charge-watts>", oldest first, for the bar's
+# history backfill. Output stays compatible with the old log format.
+set -euo pipefail
+
+n="${1:-24000}"
+[[ "$n" =~ ^[0-9]+$ ]] || n=24000
+db="$HOME/.local/state/tomv.battery-usage/power.db"
+[[ -f "$db" ]] || exit 0
+
+sqlite3 -separator ' ' "$db" \
+  "SELECT epoch, discharge_watts, charge_watts FROM (SELECT epoch, discharge_watts, charge_watts FROM samples ORDER BY epoch DESC LIMIT $n) ORDER BY epoch ASC;"

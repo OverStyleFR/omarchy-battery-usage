@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0B0C16">
+    <title>Battery telemetry</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="brand-block">
+        <div class="eyebrow">OMARCHY / POWER LAB</div>
+        <h1>Battery telemetry</h1>
+        <p>See the shape of your machine's appetite.</p>
+      </div>
+      <div class="header-actions">
+        <div id="connectionStatus" class="connection-status is-loading">
+          <span class="status-dot"></span>
+          <span id="connectionText">CONNECTING</span>
+        </div>
+        <button id="refreshButton" class="button button--quiet" type="button">Refresh</button>
+        <a id="exportCsv" class="button button--outline" href="/api/export?minutes=360&amp;format=csv">CSV</a>
+        <a id="exportJson" class="button button--outline" href="/api/export?minutes=360&amp;format=json">JSON</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="metric-grid" aria-label="Current statistics">
+        <article class="metric-card metric-card--hero">
+          <div id="currentLabel" class="metric-label">CURRENT DRAW</div>
+          <div id="currentWatts" class="metric-value metric-value--hero">--.- W</div>
+          <div id="currentState" class="metric-note">Waiting for a sample</div>
+        </article>
+        <article class="metric-card">
+          <div class="metric-label">AVERAGE</div>
+          <div id="averageWatts" class="metric-value">--.- W</div>
+          <div id="rangeCaption" class="metric-note">Selected range</div>
+        </article>
+        <article class="metric-card">
+          <div class="metric-label">PEAK</div>
+          <div id="peakWatts" class="metric-value">--.- W</div>
+          <div id="minimumWatts" class="metric-note">Min --.- W</div>
+        </article>
+        <article class="metric-card">
+          <div class="metric-label">ENERGY</div>
+          <div id="energyWh" class="metric-value">--.-- Wh</div>
+          <div id="coverageCaption" class="metric-note">No coverage yet</div>
+        </article>
+        <article class="metric-card">
+          <div class="metric-label">EST. RUNTIME</div>
+          <div id="runtime" class="metric-value">--</div>
+          <div id="profileCaption" class="metric-note">Profile --</div>
+        </article>
+      </section>
+
+      <section class="range-bar" aria-label="History range">
+        <div>
+          <div class="eyebrow">TIME WINDOW</div>
+          <div id="rangeDescription" class="range-description">Last 6 hours</div>
+        </div>
+        <div id="rangeButtons" class="range-buttons" role="group" aria-label="Select time window">
+          <button class="range-button" data-minutes="15" type="button">15m</button>
+          <button class="range-button" data-minutes="60" type="button">1h</button>
+          <button class="range-button is-active" data-minutes="360" type="button">6h</button>
+          <button class="range-button" data-minutes="1440" type="button">24h</button>
+          <button class="range-button" data-minutes="10080" type="button">7d</button>
+          <button class="range-button" data-minutes="all" type="button">ALL</button>
+        </div>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="panel panel--wide">
+          <div class="panel-heading">
+            <div>
+              <div class="eyebrow">LIVE TRACE</div>
+              <h2>Power draw</h2>
+            </div>
+            <div id="historyMeta" class="panel-meta">No samples</div>
+          </div>
+          <div class="series-legend" aria-label="Graph series">
+            <span><i class="legend-swatch legend-swatch--drain"></i>DRAIN</span>
+            <span><i class="legend-swatch legend-swatch--charge"></i>CHARGING</span>
+          </div>
+          <div class="chart-frame chart-frame--large">
+            <canvas id="historyChart" aria-label="Power draw over time"></canvas>
+            <div id="historyEmpty" class="chart-empty" hidden>No samples in this window.</div>
+          </div>
+          <div class="chart-axis-caption">
+            <span id="historyStart">--</span>
+            <span>hover the trace for a reading</span>
+            <span id="historyEnd">--</span>
+          </div>
+        </article>
+
+        <article class="panel battery-panel">
+          <div class="panel-heading">
+            <div>
+              <div class="eyebrow">DEVICE STATUS</div>
+              <h2>Battery</h2>
+            </div>
+            <div id="batteryPercent" class="battery-percent">--%</div>
+          </div>
+          <div class="battery-meter"><span id="batteryMeterFill"></span></div>
+          <dl class="detail-list">
+            <div><dt>State</dt><dd id="batteryState">--</dd></div>
+            <div><dt>Rate</dt><dd id="batteryRate">--</dd></div>
+            <div><dt>Capacity</dt><dd id="batterySize">--</dd></div>
+            <div><dt>Cycles</dt><dd id="batteryCycles">--</dd></div>
+            <div><dt>Threshold</dt><dd id="batteryThreshold">--</dd></div>
+            <div><dt>Time</dt><dd id="batteryTime">--</dd></div>
+          </dl>
+          <div class="battery-footer">
+            <span class="eyebrow">POWER PROFILE</span>
+            <strong id="batteryProfile">--</strong>
+          </div>
+        </article>
+
+        <article class="panel panel--wide">
+          <div class="panel-heading">
+            <div>
+              <div class="eyebrow">LONG MEMORY</div>
+              <h2>Energy by day</h2>
+            </div>
+            <div id="dailyMeta" class="panel-meta">No daily totals</div>
+          </div>
+          <div class="chart-frame chart-frame--daily">
+            <canvas id="dailyChart" aria-label="Energy consumed per day"></canvas>
+            <div id="dailyEmpty" class="chart-empty" hidden>Daily history will appear after the first rollover.</div>
+          </div>
+          <div id="dailyList" class="daily-list"></div>
+        </article>
+
+        <article class="panel insight-panel">
+          <div class="panel-heading">
+            <div>
+              <div class="eyebrow">READOUT</div>
+              <h2>Signal notes</h2>
+            </div>
+          </div>
+          <div class="insight-list">
+            <div class="insight-row">
+              <span>Samples in range</span>
+              <strong id="sampleCount">--</strong>
+            </div>
+            <div class="insight-row">
+              <span>Measured coverage</span>
+              <strong id="measuredCoverage">--</strong>
+            </div>
+            <div class="insight-row">
+              <span>History retained</span>
+              <strong id="historyRetained">--</strong>
+            </div>
+            <div class="insight-row">
+              <span>Last sample</span>
+              <strong id="lastSample">--</strong>
+            </div>
+          </div>
+          <p class="panel-footnote">Energy integrates the sampled draw and ignores gaps longer than one minute, so sleeping periods do not create phantom consumption.</p>
+        </article>
+      </section>
+    </main>
+
+    <footer class="footer-line">
+      <span>LOCAL ONLY / 127.0.0.1:8090</span>
+      <span id="lastUpdated">Not updated yet</span>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

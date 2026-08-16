@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "tomv.battery-usage",
+  "name": "Battery Usage",
+  "version": "1.0.0",
+  "author": "OverStyleFR",
+  "license": "MIT",
+  "description": "Live battery draw (watts) with a consumption graph, stats, runtime estimate and an optional web dashboard.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Battery Usage",
+    "description": "Instant wattage readout that opens a panel with a live consumption graph, averages, energy and battery details.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
