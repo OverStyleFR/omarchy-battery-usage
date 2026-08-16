@@ -39,6 +39,36 @@ Move the widget in your bar:
 omarchy bar move tomv.battery-usage --section right
 ```
 
+All tunables are read from the widget settings (the shell reads the
+`defaults`/`schema` declared in the manifest and merges them with your
+inline `shell.json` entry). Set them with `omarchy bar set`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `acSampleIntervalSec` | 1 | Sampling interval (s) while on AC |
+| `batterySampleIntervalSec` | 2 | Sampling interval (s) on battery with the balanced profile |
+| `powerSaverSampleIntervalSec` | 5 | Sampling interval (s) on battery with power-saver |
+| `performanceSampleIntervalSec` | 1 | Sampling interval (s) on battery with performance |
+| `graphMinutes` | 10 | Time span of the consumption graph (5–60) |
+| `profileRefreshSec` | 30 | How often the active power profile is re-read |
+| `panelRefreshSec` | 5 | How often battery details refresh while the panel is open |
+
+Example:
+
+```sh
+omarchy bar set tomv.battery-usage batterySampleIntervalSec 3 --json
+omarchy bar set tomv.battery-usage graphMinutes 15 --json
+```
+
+Use `--json` for numeric values (otherwise they are stored as strings). You
+can also edit `~/.config/omarchy/shell.json` directly: add the keys to the
+widget's entry in `bar.layout` (e.g. `{ "id": "tomv.battery-usage",
+"batterySampleIntervalSec": 3 }`). Restart the shell after changing them:
+
+```sh
+omarchy restart shell
+```
+
 ## Web dashboard (optional, disabled by default)
 
 A small local dashboard (`webapp/`) browses the full history, daily energy

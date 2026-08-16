@@ -15,6 +15,14 @@ import qs.Ui
 // restarts and can feed the optional web dashboard. The graph only renders
 // while the panel is open, so the constant cost is one tiny bash read per
 // tick.
+//
+// All tunables are exposed as bar-widget settings (defaults/schema in the
+// manifest, read via root.setting()): the per-mode sampling intervals
+// (acSampleIntervalSec, batterySampleIntervalSec, powerSaverSampleIntervalSec,
+// performanceSampleIntervalSec), the graph window (graphMinutes) and the
+// panel refresh timers (profileRefreshSec, panelRefreshSec). Set them with
+// `omarchy bar set tomv.battery-usage <key> <value> --json` or inline in
+// shell.json.
 Panel {
   id: root
   moduleName: "tomv.battery-usage"
@@ -30,7 +38,9 @@ Panel {
   property var batteryInfo: ({})
   property int statsMinutes: 10
   readonly property var scaleOptions: [10, 30, 60, 180, 360]
-  readonly property int graphMinutes: 10
+  readonly property int graphMinutes: Math.max(5, Math.round(Number(root.setting("graphMinutes", 10))))
+  readonly property int profileRefreshSec: Math.max(5, Math.round(Number(root.setting("profileRefreshSec", 30))))
+  readonly property int panelRefreshSec: Math.max(1, Math.round(Number(root.setting("panelRefreshSec", 5))))
   property bool historyLoaded: false
   property real graphHoverX: -1
   readonly property color chargeGraphColor: {
@@ -69,12 +79,15 @@ Panel {
     return batteryPresent && (UPower.onBattery || currentWatts > 0.05 || currentChargeWatts > 0.05)
   }
 
-  // 1s on AC; on battery the cadence follows the active power profile.
+  // Sampling cadence adapts to the power state; each mode is a setting
+  // (defaults match the original behavior: 1s AC, 5/2/1s on battery by
+  // power profile). Number() coercion because `omarchy bar set` without
+  // --json stores values as strings.
   readonly property int samplingSeconds: {
-    if (!UPower.onBattery) return 1
-    if (activeProfile === "power-saver") return 5
-    if (activeProfile === "performance") return 1
-    return 2
+    if (!UPower.onBattery) return Math.max(1, Number(root.setting("acSampleIntervalSec", 1)))
+    if (activeProfile === "power-saver") return Math.max(1, Number(root.setting("powerSaverSampleIntervalSec", 5)))
+    if (activeProfile === "performance") return Math.max(1, Number(root.setting("performanceSampleIntervalSec", 1)))
+    return Math.max(1, Number(root.setting("batterySampleIntervalSec", 2)))
   }
 
   readonly property string percentText: batteryInfo.percentage || "—"
@@ -503,7 +516,7 @@ Panel {
 
   Timer {
     id: profileTimer
-    interval: 30000
+    interval: root.profileRefreshSec * 1000
     repeat: true
     running: root.batteryPresent
     onTriggered: root.refreshProfile()
@@ -511,7 +524,7 @@ Panel {
 
   Timer {
     id: panelRefreshTimer
-    interval: 5000
+    interval: root.panelRefreshSec * 1000
     repeat: true
     running: root.opened
     onTriggered: {
