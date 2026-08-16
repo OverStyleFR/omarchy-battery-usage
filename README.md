@@ -17,7 +17,8 @@ omarchy plugin add https://github.com/OverStyleFR/omarchy-battery-usage.git --en
 ## Usage
 
 Click the widget to open or close the consumption panel. Press Escape to close
-it. The panel shows:
+it. With the panel open, press **Left/Right arrow** to change the stats window
+scale (10m → 6h). The panel shows:
 
 - **Consumption** – live graph of drain and charge over the last 10 minutes.
 - **Stats** – average, peak and energy for a selectable window (10m to 6h),

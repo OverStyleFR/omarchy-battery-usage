@@ -29,6 +29,7 @@ Panel {
   property string activeProfile: ""
   property var batteryInfo: ({})
   property int statsMinutes: 10
+  readonly property var scaleOptions: [10, 30, 60, 180, 360]
   readonly property int graphMinutes: 10
   property bool historyLoaded: false
   property real graphHoverX: -1
@@ -576,6 +577,13 @@ Panel {
       anchors.fill: parent
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) {
+        if (dy !== 0) return
+        var idx = root.scaleOptions.indexOf(root.statsMinutes)
+        if (idx < 0) idx = 0
+        idx = (idx + dx + root.scaleOptions.length) % root.scaleOptions.length
+        root.statsMinutes = root.scaleOptions[idx]
+      }
 
       Column {
         id: column
@@ -773,7 +781,7 @@ Panel {
               spacing: Style.space(4)
 
               Repeater {
-                model: [10, 30, 60, 180, 360]
+                model: root.scaleOptions
                 Button {
                   required property int modelData
                   required property int index
