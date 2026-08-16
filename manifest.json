@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "tomv.battery-usage",
   "name": "Battery Usage",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "OverStyleFR",
   "license": "MIT",
   "description": "Live battery draw (watts) with a consumption graph, stats, runtime estimate and an optional web dashboard.",

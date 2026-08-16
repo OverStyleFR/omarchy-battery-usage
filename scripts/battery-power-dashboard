@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# Control the Battery Usage web dashboard.
+#
+# The dashboard server is on-demand: `launch` starts it for the duration of
+# the web app session and stops it again when the web app window closes.
+# `enable` installs a "Battery Usage" launcher in the app menu (through the
+# Omarchy web app mechanism) whose Exec points back at `launch`.
+#
+# The server process is tracked via a pid file in the plugin state directory;
+# it honours BATTERY_STATS_HOST and BATTERY_STATS_PORT (defaults 127.0.0.1
+# and 8090) like webapp/server.py.
+#
+# Usage:
+#   battery-power-dashboard status     show launcher/server/database state
+#   battery-power-dashboard enable     install the web app launcher
+#   battery-power-dashboard disable    remove the launcher and stop the server
+#   battery-power-dashboard toggle     enable or disable depending on state
+#   battery-power-dashboard launch     start server + open web app, stop on close
+
+set -euo pipefail
+
+plugin_root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+state_dir="$HOME/.local/state/tomv.battery-usage"
+db_path="$state_dir/power.db"
+pid_file="$state_dir/server.pid"
+log_file="$state_dir/server.log"
+launcher_name="Battery Usage"
+desktop_file="$HOME/.local/share/applications/$launcher_name.desktop"
+
+host="${BATTERY_STATS_HOST:-127.0.0.1}"
+port="${BATTERY_STATS_PORT:-8090}"
+[[ "$port" =~ ^[0-9]+$ ]] || port=8090
+case "$host" in
+  0.0.0.0 | :: | ::0) web_host="127.0.0.1" ;;
+  *) web_host="$host" ;;
+esac
+url="http://$web_host:$port/"
+
+server_pid() {
+  [[ -f "$pid_file" ]] || return 1
+  local pid
+  pid="$(<"$pid_file")"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  printf '%s\n' "$pid"
+}
+
+health_ok() {
+  curl -fsS --max-time 1 "${url}api/health" >/dev/null 2>&1
+}
+
+port_busy() {
+  command -v ss >/dev/null 2>&1 || return 1
+  ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN
+}
+
+start_server() {
+  mkdir -p "$state_dir"
+  nohup python3 "$plugin_root/webapp/server.py" >>"$log_file" 2>&1 &
+  local pid=$!
+  printf '%s\n' "$pid" >"$pid_file"
+  local i
+  for i in $(seq 1 25); do
+    if health_ok; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "battery-power-dashboard: server failed to start; log tail:" >&2
+  tail -n 5 "$log_file" 2>/dev/null >&2 || true
+  kill -TERM "$pid" 2>/dev/null || true
+  rm -f "$pid_file"
+  return 1
+}
+
+stop_server() {
+  local pid
+  pid="$(server_pid 2>/dev/null)" || { rm -f "$pid_file"; return 0; }
+  kill -INT "$pid" 2>/dev/null || true
+  local i
+  for i in $(seq 1 10); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -TERM "$pid" 2>/dev/null || true
+  rm -f "$pid_file"
+}
+
+cmd_launch() {
+  command -v python3 >/dev/null 2>&1 || {
+    echo "battery-power-dashboard: python3 not found" >&2
+    return 1
+  }
+  [[ -f "$db_path" ]] ||
+    echo "battery-power-dashboard: no sample database yet ($db_path); the widget has not recorded any data." >&2
+
+  local started=false
+  if health_ok || server_pid >/dev/null; then
+    started=false
+  elif port_busy; then
+    echo "battery-power-dashboard: port $port is already in use by another service" >&2
+    return 1
+  else
+    start_server || return 1
+    started=true
+  fi
+
+  # Blocks while the web app window is open (uwsm-app), then tears the server down.
+  omarchy-launch-webapp "$url" || true
+
+  if "$started" && ! pgrep -f "chromium.*--app=${url}" >/dev/null 2>&1; then
+    stop_server
+  fi
+}
+
+cmd_enable() {
+  if [[ -f "$desktop_file" ]]; then
+    echo "battery-power-dashboard: '$launcher_name' is already enabled"
+    return 0
+  fi
+  command -v omarchy-webapp-install >/dev/null 2>&1 || {
+    echo "battery-power-dashboard: omarchy-webapp-install not found" >&2
+    return 1
+  }
+  omarchy webapp install "$launcher_name" "$url" "battery-full" \
+    "$plugin_root/scripts/battery-power-dashboard launch"
+  echo
+  echo "Dashboard enabled. Launch '$launcher_name' from the app launcher (SUPER + SPACE), or run:"
+  echo "  $plugin_root/scripts/battery-power-dashboard launch"
+}
+
+cmd_disable() {
+  if [[ -f "$desktop_file" ]]; then
+    omarchy webapp remove "$launcher_name" || true
+  fi
+  stop_server
+  echo "Dashboard disabled"
+}
+
+cmd_toggle() {
+  if [[ -f "$desktop_file" ]]; then
+    cmd_disable
+  else
+    cmd_enable
+  fi
+}
+
+cmd_status() {
+  printf 'web app:   '
+  if [[ -f "$desktop_file" ]]; then
+    printf '%s\n' "installed ($launcher_name)"
+  else
+    printf '%s\n' "not installed"
+  fi
+
+  printf 'server:    '
+  local pid
+  if pid="$(server_pid 2>/dev/null)"; then
+    printf '%s\n' "running (pid $pid)"
+  elif [[ -f "$pid_file" ]]; then
+    printf '%s\n' "not running (stale pid file)"
+  else
+    printf '%s\n' "not running"
+  fi
+
+  if health_ok; then
+    local health samples
+    health="$(curl -fsS --max-time 1 "${url}api/health" 2>/dev/null || true)"
+    samples="$(printf '%s' "$health" | sed -n 's/.*"samples":\([0-9]*\).*/\1/p')"
+    printf 'health:    ok (%s samples)\n' "${samples:-?}"
+  else
+    printf 'health:    unreachable\n'
+  fi
+
+  printf 'database:  %s\n' "$db_path"
+  if [[ -f "$db_path" ]]; then
+    printf 'samples:   '
+    sqlite3 "$db_path" "SELECT COUNT(*) FROM samples" 2>/dev/null || printf '?\n'
+  else
+    printf 'samples:   none yet\n'
+  fi
+}
+
+cmd_help() {
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
+case "${1:-}" in
+  status) cmd_status ;;
+  enable) cmd_enable ;;
+  disable) cmd_disable ;;
+  toggle) cmd_toggle ;;
+  launch) cmd_launch ;;
+  help | --help | -h | "") cmd_help ;;
+  *) echo "battery-power-dashboard: unknown command '$1'" >&2
+     cmd_help >&2
+     exit 1 ;;
+esac

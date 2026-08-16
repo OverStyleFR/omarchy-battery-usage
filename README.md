@@ -38,17 +38,34 @@ omarchy bar move tomv.battery-usage --section right
 
 ## Web dashboard (optional, disabled by default)
 
-A small local dashboard (`webapp/`) can be run to browse the full history,
-daily energy and CSV/JSON export. It is **not** started automatically and
-must be launched manually:
+A small local dashboard (`webapp/`) browses the full history, daily energy
+and CSV/JSON export. The server is **on-demand**: it starts when you open
+the web app and stops again when you close its window.
 
 ```sh
-python3 ~/.config/omarchy/plugins/tomv.battery-usage/webapp/server.py
-# then open http://127.0.0.1:8090
+~/.config/omarchy/plugins/tomv.battery-usage/scripts/battery-power-dashboard enable
 ```
 
-Defaults to `127.0.0.1:8090`; override with `BATTERY_STATS_HOST` and
-`BATTERY_STATS_PORT`. It reads the same database as the widget.
+This installs a **Battery Usage** launcher in the app menu
+(SUPER + SPACE). Launching it runs checks (Python, sample database, free
+port), starts the local server, opens the dashboard window, and stops the
+server when the window closes.
+
+Manage it from the terminal (the script is also linked into `$PATH` on this
+system):
+
+```sh
+battery-power-dashboard status    # launcher/server/database state
+battery-power-dashboard enable    # install the web app launcher
+battery-power-dashboard disable   # remove the launcher and stop the server
+battery-power-dashboard toggle    # flip between the two
+battery-power-dashboard launch    # open the dashboard now, stop on close
+```
+
+Server state is kept in `~/.local/state/tomv.battery-usage/` (`server.pid`,
+`server.log`). Defaults to `127.0.0.1:8090`; override with
+`BATTERY_STATS_HOST` and `BATTERY_STATS_PORT`. It reads the same database as
+the widget.
 
 ## Dependencies
 
