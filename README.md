@@ -6,6 +6,8 @@ peak, energy and battery details. Sampling history is kept in a local SQLite
 database so it survives shell restarts, and an optional web dashboard can be
 enabled to browse it.
 
+![Battery Usage panel](preview.png)
+
 ## Install
 
 ```sh
@@ -66,6 +68,8 @@ Server state is kept in `~/.local/state/tomv.battery-usage/` (`server.pid`,
 `server.log`). Defaults to `127.0.0.1:8090`; override with
 `BATTERY_STATS_HOST` and `BATTERY_STATS_PORT`. It reads the same database as
 the widget.
+
+![Web dashboard](webapp-preview.png)
 
 ## Dependencies
 
