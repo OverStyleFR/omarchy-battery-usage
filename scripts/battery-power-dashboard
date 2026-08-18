@@ -45,8 +45,16 @@ server_pid() {
   printf '%s\n' "$pid"
 }
 
+health_json() {
+  python3 -c '
+import sys, urllib.request as u
+with u.urlopen(sys.argv[1], timeout=1) as r:
+    sys.stdout.write(r.read().decode())
+' "$1"
+}
+
 health_ok() {
-  curl -fsS --max-time 1 "${url}api/health" >/dev/null 2>&1
+  health_json "${url}api/health" >/dev/null 2>&1
 }
 
 port_busy() {
@@ -165,7 +173,7 @@ cmd_status() {
 
   if health_ok; then
     local health samples
-    health="$(curl -fsS --max-time 1 "${url}api/health" 2>/dev/null || true)"
+    health="$(health_json "${url}api/health" 2>/dev/null || true)"
     samples="$(printf '%s' "$health" | sed -n 's/.*"samples":\([0-9]*\).*/\1/p')"
     printf 'health:    ok (%s samples)\n' "${samples:-?}"
   else
