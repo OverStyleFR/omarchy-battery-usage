@@ -21,7 +21,7 @@ it. With the panel open, press **Left/Right arrow** to change the stats window
 scale (10m → 6h). The panel shows:
 
 - **Consumption** – live graph of drain and charge over the last 10 minutes.
-- **Battery history** – the active session, up to seven recent discharge
+- **Battery history** – the active session, up to five recent discharge
   sessions from the last seven days, completed charging-session averages, and
   the last completed charge time, duration, and percentage gained.
 - **Stats** – average, peak and energy for a selectable window (10m to 6h),

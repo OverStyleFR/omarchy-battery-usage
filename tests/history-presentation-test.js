@@ -22,8 +22,13 @@ const lastCharge = history.lastCompletedChargingSession([
 assert.equal(lastCharge.startEpoch, 200, "an active charge does not replace the last completed charge");
 assert.equal(history.lastCompletedChargingSession([]), null);
 
-const recent = history.recentDischargeSessions(sessions, 7);
-assert.deepEqual(recent.map((session) => session.startEpoch), [100, 300], "meters remain chronological");
+const dischargeSessions = [1, 2, 3, 4, 5, 6].map((startEpoch) => ({
+  state: "discharging",
+  startEpoch,
+  percentChange: 1,
+}));
+const recent = history.recentDischargeSessions(dischargeSessions, 5);
+assert.deepEqual(recent.map((session) => session.startEpoch), [2, 3, 4, 5, 6], "only the newest five discharge sessions are shown");
 
 assert.deepEqual(history.presentationState(false, "", [], "—", false), {
   loading: true,

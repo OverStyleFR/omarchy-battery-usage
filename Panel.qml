@@ -170,7 +170,7 @@ Panel {
   }
 
   function recentDischargeSessions() {
-    return BatteryHistory.recentDischargeSessions(batterySessions, 7)
+    return BatteryHistory.recentDischargeSessions(batterySessions, 5)
   }
 
   function maxRecentDischargeChange() {
@@ -182,7 +182,7 @@ Panel {
   }
 
   function sessionDate(epoch) {
-    return Qt.formatDateTime(new Date(epoch * 1000), "ddd d MMM")
+    return Qt.formatDateTime(new Date(epoch * 1000), "ddd d MMM · HH:mm")
   }
 
   function sessionDateTimeRange(session) {
@@ -196,6 +196,12 @@ Panel {
     var rounded = Math.round(delta * 10) / 10
     var digits = Math.abs(rounded % 1) > 0.01 ? 1 : 0
     return (rounded > 0 ? "+" : "") + rounded.toFixed(digits) + "%"
+  }
+
+  function formatBatteryPercent(percent) {
+    if (percent === null || !isFinite(percent)) return ""
+    var rounded = Math.round(percent * 10) / 10
+    return rounded.toFixed(Math.abs(rounded % 1) > 0.01 ? 1 : 0) + "%"
   }
 
   readonly property string activeSessionText: BatteryHistory.activeSessionText(batterySessions)
@@ -213,12 +219,20 @@ Panel {
   readonly property string dischargingSummaryText: completedSessionSummaryText("discharge")
   readonly property string chargingSummaryText: completedSessionSummaryText("charge")
   readonly property var lastCompletedCharge: BatteryHistory.lastCompletedChargingSession(batterySessions)
-  readonly property string lastChargeText: {
+  readonly property string lastChargeWhenText: {
     if (!lastCompletedCharge) return "No completed charge yet"
-    var gain = formatPercentageDelta(lastCompletedCharge.percentageDelta)
     return sessionDateTimeRange(lastCompletedCharge)
-      + " · " + formatSessionDuration(lastCompletedCharge.durationSeconds)
-      + (gain.length > 0 ? " · " + gain : "")
+  }
+  readonly property string lastChargeDetailsText: {
+    if (!lastCompletedCharge) return ""
+    var details = []
+    var start = formatBatteryPercent(lastCompletedCharge.startPercent)
+    var end = formatBatteryPercent(lastCompletedCharge.endPercent)
+    var gain = formatPercentageDelta(lastCompletedCharge.percentageDelta)
+    if (start.length > 0 && end.length > 0) details.push(start + " → " + end)
+    details.push(formatSessionDuration(lastCompletedCharge.durationSeconds))
+    if (gain.length > 0) details.push(gain)
+    return details.join(" · ")
   }
 
   function sampleLine(epoch, dischargeWatts, chargeWatts) {
@@ -879,7 +893,7 @@ Panel {
               spacing: Style.space(8)
 
               Text {
-                width: Style.space(78)
+                width: Style.space(124)
                 text: root.sessionDate(modelData.startEpoch)
                 color: root.bar.foreground
                 opacity: modelData.complete ? 0.65 : 1
@@ -889,7 +903,7 @@ Panel {
               }
 
               Rectangle {
-                width: Math.max(Style.space(80), parent.width - Style.space(164))
+                width: Math.max(Style.space(60), parent.width - Style.space(210))
                 height: Style.space(6)
                 radius: height / 2
                 color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.12)
@@ -953,11 +967,22 @@ Panel {
 
             Text {
               width: parent.width
-              text: root.lastChargeText
+              text: root.lastChargeWhenText
               color: root.bar.foreground
               opacity: 0.85
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
+              elide: Text.ElideRight
+            }
+
+            Text {
+              width: parent.width
+              text: root.lastChargeDetailsText
+              visible: text.length > 0
+              color: root.bar.foreground
+              opacity: 0.65
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
               elide: Text.ElideRight
             }
           }
