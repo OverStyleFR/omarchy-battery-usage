@@ -185,23 +185,8 @@ Panel {
     return Qt.formatDateTime(new Date(epoch * 1000), "ddd d MMM · HH:mm")
   }
 
-  function sessionDateTimeRange(session) {
-    var start = new Date(session.startEpoch * 1000)
-    var end = new Date(session.endEpoch * 1000)
-    return Qt.formatDateTime(start, "ddd d MMM · HH:mm") + "–" + Qt.formatDateTime(end, "HH:mm")
-  }
-
-  function formatPercentageDelta(delta) {
-    if (delta === null || !isFinite(delta)) return ""
-    var rounded = Math.round(delta * 10) / 10
-    var digits = Math.abs(rounded % 1) > 0.01 ? 1 : 0
-    return (rounded > 0 ? "+" : "") + rounded.toFixed(digits) + "%"
-  }
-
-  function formatBatteryPercent(percent) {
-    if (percent === null || !isFinite(percent)) return ""
-    var rounded = Math.round(percent * 10) / 10
-    return rounded.toFixed(Math.abs(rounded % 1) > 0.01 ? 1 : 0) + "%"
+  function sessionDateTime(epoch) {
+    return Qt.formatDateTime(new Date(epoch * 1000), "ddd d MMM · HH:mm")
   }
 
   readonly property string activeSessionText: BatteryHistory.activeSessionText(batterySessions)
@@ -219,20 +204,9 @@ Panel {
   readonly property string dischargingSummaryText: completedSessionSummaryText("discharge")
   readonly property string chargingSummaryText: completedSessionSummaryText("charge")
   readonly property var lastCompletedCharge: BatteryHistory.lastCompletedChargingSession(batterySessions)
-  readonly property string lastChargeWhenText: {
+  readonly property string lastChargeText: {
     if (!lastCompletedCharge) return "No completed charge yet"
-    return sessionDateTimeRange(lastCompletedCharge)
-  }
-  readonly property string lastChargeDetailsText: {
-    if (!lastCompletedCharge) return ""
-    var details = []
-    var start = formatBatteryPercent(lastCompletedCharge.startPercent)
-    var end = formatBatteryPercent(lastCompletedCharge.endPercent)
-    var gain = formatPercentageDelta(lastCompletedCharge.percentageDelta)
-    if (start.length > 0 && end.length > 0) details.push(start + " → " + end)
-    details.push(formatSessionDuration(lastCompletedCharge.durationSeconds))
-    if (gain.length > 0) details.push(gain)
-    return details.join(" · ")
+    return sessionDateTime(lastCompletedCharge.endEpoch)
   }
 
   function sampleLine(epoch, dischargeWatts, chargeWatts) {
@@ -967,22 +941,11 @@ Panel {
 
             Text {
               width: parent.width
-              text: root.lastChargeWhenText
+              text: root.lastChargeText
               color: root.bar.foreground
               opacity: 0.85
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-            }
-
-            Text {
-              width: parent.width
-              text: root.lastChargeDetailsText
-              visible: text.length > 0
-              color: root.bar.foreground
-              opacity: 0.65
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
               elide: Text.ElideRight
             }
           }
