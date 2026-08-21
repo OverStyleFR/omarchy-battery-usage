@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "tomv.battery-usage",
   "name": "Battery Usage",
-  "version": "1.2.1",
+  "version": "1.3.1",
   "author": "OverStyleFR",
   "license": "MIT",
-  "description": "Live battery draw (watts) with a consumption graph, stats, runtime estimate and an optional web dashboard.",
+  "description": "Live battery draw with charge/discharge session history, a consumption graph, stats and an optional web dashboard.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "Battery Usage",
-    "description": "Instant wattage readout that opens a panel with a live consumption graph, averages, energy and battery details.",
+    "description": "Instant wattage readout that opens a panel with recent battery sessions, a live graph, averages, energy and battery details.",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",

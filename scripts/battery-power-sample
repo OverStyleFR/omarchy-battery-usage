@@ -4,7 +4,8 @@
 #
 # Discharge and charge are kept separate. Consumption statistics integrate
 # only the discharge column, while the graph can show charging in another
-# color. AC idle is not recorded.
+# color. Percentage and normalized power state are persisted for session
+# history while stdout stays compatible with existing panel consumers.
 #
 # Samples are stored in a SQLite database (~/.local/state/tomv.battery-usage/power.db)
 # so the web dashboard and the bar's graph can query indexed ranges without
@@ -18,7 +19,11 @@ shopt -s nullglob
 discharge_microwatts=0
 charge_microwatts=0
 found=false
-record_sample=false
+has_charging=false
+has_discharging=false
+has_idle=false
+percent_total=0
+percent_count=0
 power_supply_root="${BATTERY_POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
 
 for battery in "$power_supply_root"/BAT*; do
@@ -27,28 +32,46 @@ for battery in "$power_supply_root"/BAT*; do
 
   status=""
   [[ -r "$battery/status" ]] && status="$(<"$battery/status")"
+  if [[ -r "$battery/capacity" ]]; then
+    capacity="$(<"$battery/capacity")"
+    if [[ "$capacity" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      percent_total="$(awk -v total="$percent_total" -v value="$capacity" 'BEGIN { print total + value }')"
+      percent_count=$((percent_count + 1))
+    fi
+  fi
+
   battery_microwatts=0
+  has_power=false
   if [[ -r "$battery/power_now" ]]; then
     value="$(<"$battery/power_now")"
     value="${value#-}"
-    battery_microwatts="$value"
+    if [[ "$value" =~ ^[0-9]+$ ]]; then
+      battery_microwatts="$value"
+      has_power=true
+    fi
   elif [[ -r "$battery/current_now" && -r "$battery/voltage_now" ]]; then
     current="$(<"$battery/current_now")"
     voltage="$(<"$battery/voltage_now")"
     current="${current#-}"
     voltage="${voltage#-}"
-    battery_microwatts=$((current * voltage / 1000000))
-  else
-    continue
+    if [[ "$current" =~ ^[0-9]+$ && "$voltage" =~ ^[0-9]+$ ]]; then
+      battery_microwatts=$((current * voltage / 1000000))
+      has_power=true
+    fi
   fi
 
   if [[ "$status" == "Charging" ]]; then
-    charge_microwatts=$((charge_microwatts + battery_microwatts))
-    record_sample=true
-  elif [[ "$status" == "Discharging" || "$status" == "" ]]; then
-    # A missing status keeps the legacy fallback and counts as discharge.
-    discharge_microwatts=$((discharge_microwatts + battery_microwatts))
-    record_sample=true
+    has_charging=true
+    "$has_power" && charge_microwatts=$((charge_microwatts + battery_microwatts))
+  elif [[ "$status" == "Discharging" ]]; then
+    has_discharging=true
+    "$has_power" && discharge_microwatts=$((discharge_microwatts + battery_microwatts))
+  elif [[ "$status" == "" ]]; then
+    # Preserve the legacy live watts fallback without inventing a persisted
+    # state transition when sysfs cannot report battery status.
+    "$has_power" && discharge_microwatts=$((discharge_microwatts + battery_microwatts))
+  elif [[ "$status" == "Not charging" || "$status" == "Full" ]]; then
+    has_idle=true
   fi
 done
 
@@ -59,24 +82,84 @@ read -r discharge_watts charge_watts < <(
     'BEGIN { printf "%.1f %.1f\n", discharge / 1000000, charge / 1000000 }'
 )
 
-db="$HOME/.local/state/tomv.battery-usage/power.db"
+if "$has_discharging"; then
+  power_state="discharging"
+elif "$has_charging"; then
+  power_state="charging"
+elif "$has_idle"; then
+  power_state="idle"
+else
+  power_state="unknown"
+fi
+
+battery_percent_sql="NULL"
+if ((percent_count > 0)); then
+  battery_percent_sql="$(awk -v total="$percent_total" -v count="$percent_count" 'BEGIN { printf "%.3f", total / count }')"
+fi
+
+ac_online_sql="NULL"
+ac_found=false
+ac_online=0
+for supply in "$power_supply_root"/AC* "$power_supply_root"/ADP*; do
+  [[ -d "$supply" && -r "$supply/online" ]] || continue
+  online="$(<"$supply/online")"
+  [[ "$online" =~ ^[01]$ ]] || continue
+  ac_found=true
+  ((online == 1)) && ac_online=1
+done
+if "$ac_found"; then
+  ac_online_sql="$ac_online"
+elif [[ "$power_state" == "charging" ]]; then
+  ac_online_sql=1
+elif [[ "$power_state" == "discharging" ]]; then
+  ac_online_sql=0
+fi
+
+db="${BATTERY_POWER_DB:-$HOME/.local/state/tomv.battery-usage/power.db}"
 mkdir -p "$(dirname "$db")"
 
-epoch="$(date +%s)"
-if "$record_sample"; then
+epoch="${BATTERY_SAMPLE_EPOCH:-$(date +%s)}"
+[[ "$epoch" =~ ^[0-9]+$ ]] || epoch="$(date +%s)"
+
+store_sample() {
   sqlite3 "$db" "
+    PRAGMA busy_timeout=3000;
     PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS samples (
       epoch INTEGER PRIMARY KEY,
       discharge_watts REAL NOT NULL,
-      charge_watts REAL NOT NULL
+      charge_watts REAL NOT NULL,
+      battery_percent REAL,
+      power_state TEXT,
+      ac_online INTEGER
     );
-    INSERT INTO samples(epoch, discharge_watts, charge_watts)
-      VALUES($epoch, $discharge_watts, $charge_watts)
+    INSERT INTO samples(epoch, discharge_watts, charge_watts, battery_percent, power_state, ac_online)
+      VALUES($epoch, $discharge_watts, $charge_watts, $battery_percent_sql, '$power_state', $ac_online_sql)
       ON CONFLICT(epoch) DO UPDATE SET
         discharge_watts = excluded.discharge_watts,
-        charge_watts = excluded.charge_watts;
-  " >/dev/null 2>&1 || echo "battery-power-sample: failed to store sample" >&2
+        charge_watts = excluded.charge_watts,
+        battery_percent = excluded.battery_percent,
+        power_state = excluded.power_state,
+        ac_online = excluded.ac_online;
+  "
+}
+
+add_column_if_missing() {
+  local name="$1"
+  local definition="$2"
+  if ! grep -qx "$name" <<<"$columns"; then
+    sqlite3 "$db" "ALTER TABLE samples ADD COLUMN $name $definition;" >/dev/null 2>&1 || true
+  fi
+}
+
+# New and migrated databases take the one-process fast path. A legacy schema
+# rejects the first insert, triggering its additive migration and one retry.
+if ! store_sample >/dev/null 2>&1; then
+  columns="$(sqlite3 "$db" "SELECT name FROM pragma_table_info('samples');" 2>/dev/null || true)"
+  add_column_if_missing battery_percent REAL
+  add_column_if_missing power_state TEXT
+  add_column_if_missing ac_online INTEGER
+  store_sample >/dev/null 2>&1 || echo "battery-power-sample: failed to store sample" >&2
 fi
 
 printf '%s %s %s\n' "$epoch" "$discharge_watts" "$charge_watts"

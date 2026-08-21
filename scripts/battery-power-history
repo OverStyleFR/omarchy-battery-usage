@@ -1,13 +1,111 @@
 #!/usr/bin/env bash
-# Print the most recent N recorded battery samples as
-# "<epoch> <discharge-watts> <charge-watts>", oldest first, for the bar's
-# history backfill. Output stays compatible with the old log format.
+# With no option, print recent samples in the legacy format. --sessions emits
+# tab-separated charge/discharge sessions for the native history panel, and
+# --summary emits completed-session counts and average durations.
 set -euo pipefail
 
-n="${1:-24000}"
-[[ "$n" =~ ^[0-9]+$ ]] || n=24000
-db="$HOME/.local/state/tomv.battery-usage/power.db"
+db="${BATTERY_POWER_DB:-$HOME/.local/state/tomv.battery-usage/power.db}"
 [[ -f "$db" ]] || exit 0
 
-sqlite3 -separator ' ' "$db" \
-  "SELECT epoch, discharge_watts, charge_watts FROM (SELECT epoch, discharge_watts, charge_watts FROM samples ORDER BY epoch DESC LIMIT $n) ORDER BY epoch ASC;"
+mode="${1:-samples}"
+if [[ "$mode" != "--sessions" && "$mode" != "--summary" ]]; then
+  n="$mode"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=24000
+  sqlite3 -separator ' ' "$db" \
+    "SELECT epoch, discharge_watts, charge_watts FROM (SELECT epoch, discharge_watts, charge_watts FROM samples ORDER BY epoch DESC LIMIT $n) ORDER BY epoch ASC;"
+  exit 0
+fi
+
+columns="$(sqlite3 "$db" "SELECT name FROM pragma_table_info('samples');" 2>/dev/null || true)"
+grep -qx power_state <<<"$columns" || exit 0
+
+days="${2:-7}"
+[[ "$days" =~ ^[0-9]+$ ]] || days=7
+((days > 0)) || days=7
+now="${BATTERY_HISTORY_NOW:-$(date +%s)}"
+[[ "$now" =~ ^[0-9]+$ ]] || now="$(date +%s)"
+cutoff=$((now - days * 86400))
+gap_seconds="${BATTERY_SESSION_GAP_SECONDS:-300}"
+[[ "$gap_seconds" =~ ^[0-9]+$ ]] || gap_seconds=300
+
+session_sql="
+WITH source AS (
+  SELECT epoch, discharge_watts, charge_watts, battery_percent,
+         CASE WHEN ac_online = 1 AND power_state IN ('discharging', 'unknown') THEN 'idle' ELSE power_state END AS session_state
+  FROM samples
+  WHERE epoch >= $cutoff
+), meaningful AS (
+  SELECT epoch, discharge_watts, charge_watts, battery_percent, session_state AS power_state,
+         CASE session_state WHEN 'charging' THEN charge_watts ELSE discharge_watts END AS watts
+  FROM source
+  WHERE session_state IN ('charging', 'discharging', 'idle')
+), ordered AS (
+  SELECT *,
+         LAG(epoch) OVER (ORDER BY epoch) AS previous_epoch,
+         LAG(power_state) OVER (ORDER BY epoch) AS previous_state
+  FROM meaningful
+), marked AS (
+  SELECT *, CASE
+    WHEN previous_epoch IS NULL OR power_state <> previous_state OR epoch - previous_epoch > $gap_seconds THEN 1
+    ELSE 0
+  END AS starts_group
+  FROM ordered
+), numbered AS (
+  SELECT *, SUM(starts_group) OVER (ORDER BY epoch) AS session_group
+  FROM marked
+), measured AS (
+  SELECT *, LAG(epoch) OVER (PARTITION BY session_group ORDER BY epoch) AS session_previous_epoch
+  FROM numbered
+), sample_sessions AS (
+  SELECT session_group, power_state,
+         MIN(epoch) AS start_epoch,
+         MAX(epoch) AS sample_end_epoch,
+         (SELECT battery_percent FROM numbered first_sample
+          WHERE first_sample.session_group = measured.session_group AND battery_percent IS NOT NULL
+          ORDER BY epoch LIMIT 1) AS start_percent,
+         (SELECT battery_percent FROM numbered last_sample
+          WHERE last_sample.session_group = measured.session_group AND battery_percent IS NOT NULL
+          ORDER BY epoch DESC LIMIT 1) AS end_percent,
+         CASE WHEN MAX(epoch) < (SELECT MAX(epoch) FROM meaningful) THEN 1 ELSE 0 END AS complete
+  FROM measured
+  WHERE power_state IN ('charging', 'discharging')
+  GROUP BY session_group, power_state
+), resolved AS (
+  SELECT *, (SELECT MIN(epoch) FROM meaningful boundary WHERE boundary.epoch > sample_end_epoch) AS boundary_epoch
+  FROM sample_sessions
+), sessions AS (
+  SELECT session_group, power_state, start_epoch,
+         CASE WHEN complete = 1 AND boundary_epoch - sample_end_epoch <= $gap_seconds
+              THEN boundary_epoch ELSE sample_end_epoch END AS end_epoch,
+         start_percent,
+         CASE WHEN complete = 1 AND boundary_epoch - sample_end_epoch <= $gap_seconds
+              THEN COALESCE((SELECT battery_percent FROM meaningful boundary
+                             WHERE boundary.epoch = resolved.boundary_epoch), end_percent)
+              ELSE end_percent END AS end_percent,
+         complete
+  FROM resolved
+)
+SELECT power_state, start_epoch, end_epoch,
+       CASE WHEN start_percent IS NULL THEN '' ELSE printf('%.1f', start_percent) END,
+       CASE WHEN end_percent IS NULL THEN '' ELSE printf('%.1f', end_percent) END,
+       end_epoch - start_epoch, complete
+FROM sessions
+ORDER BY start_epoch;
+"
+
+if [[ "$mode" == "--sessions" ]]; then
+  printf 'state\tstart_epoch\tend_epoch\tstart_percent\tend_percent\tduration_seconds\tcomplete\n'
+  sqlite3 -separator $'\t' "$db" "$session_sql"
+  exit 0
+fi
+
+sqlite3 -separator $'\t' "$db" "$session_sql" | awk -F '\t' '
+  $7 == 1 && $1 == "discharging" { discharge_count++; discharge_seconds += $6 }
+  $7 == 1 && $1 == "charging" { charge_count++; charge_seconds += $6 }
+  END {
+    printf "completed_discharge_sessions\t%d\n", discharge_count
+    printf "average_discharge_seconds\t%d\n", discharge_count ? discharge_seconds / discharge_count : 0
+    printf "completed_charge_sessions\t%d\n", charge_count
+    printf "average_charge_seconds\t%d\n", charge_count ? charge_seconds / charge_count : 0
+  }
+'

@@ -1,10 +1,10 @@
 # Battery Usage
 
 Omarchy bar widget showing the live battery draw (`󱐋<watts> W`). Left-click
-opens a panel with a live consumption graph (drain and charge), averages,
-peak, energy and battery details. Sampling history is kept in a local SQLite
-database so it survives shell restarts, and an optional web dashboard can be
-enabled to browse it.
+opens a panel with recent charge/discharge sessions, a live consumption graph
+(drain and charge), averages, peak, energy and battery details. Sampling
+history is kept in a local SQLite database so it survives shell restarts, and
+an optional web dashboard can be enabled to browse it.
 
 ![Battery Usage panel](preview.png)
 
@@ -21,6 +21,9 @@ it. With the panel open, press **Left/Right arrow** to change the stats window
 scale (10m → 6h). The panel shows:
 
 - **Consumption** – live graph of drain and charge over the last 10 minutes.
+- **Battery history** – the active session, up to seven recent discharge
+  sessions from the last seven days, completed charging-session averages, and
+  the last completed charge time, duration, and percentage gained.
 - **Stats** – average, peak and energy for a selectable window (10m to 6h),
   plus an estimated runtime on battery.
 - **Battery** – state, time left / time to full, battery size and charge
@@ -110,6 +113,26 @@ the widget.
 - Python 3 (standard library only) for the optional web dashboard.
 
 Data is stored in `~/.local/state/tomv.battery-usage/power.db`.
+
+## Battery session rules
+
+Each persisted sample includes battery percentage and a normalized power state
+(`charging`, `discharging`, `idle`, or `unknown`). A session starts when
+charging or discharging begins. A state transition or a gap longer than five
+minutes completes the previous session; idle samples close an active session.
+Unknown samples are ignored for boundaries so a temporarily unreadable sysfs
+value does not create a false transition.
+
+The current charge or discharge session appears in the panel but is excluded
+from completed-session averages. Existing databases are migrated additively on
+the next sample, preserving their watts history; legacy rows simply have no
+percentage or power state.
+
+Run the integration and presentation checks with:
+
+```sh
+tests/run
+```
 
 ## Remove
 

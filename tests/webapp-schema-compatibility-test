@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+test_home="$(mktemp -d)"
+trap 'rm -rf "$test_home"' EXIT
+db="$test_home/.local/state/tomv.battery-usage/power.db"
+mkdir -p "$(dirname "$db")"
+
+sqlite3 "$db" <<'SQL'
+CREATE TABLE samples (
+  epoch INTEGER PRIMARY KEY,
+  discharge_watts REAL NOT NULL,
+  charge_watts REAL NOT NULL,
+  battery_percent REAL,
+  power_state TEXT,
+  ac_online INTEGER
+);
+INSERT INTO samples VALUES
+  (100, 8.0, 0.0, 80.0, 'discharging', 0),
+  (160, 7.0, 0.0, 79.0, 'discharging', 0),
+  (220, 0.0, 12.0, 79.0, 'charging', 1);
+SQL
+
+HOME="$test_home" python3 - "$repo_root/webapp/server.py" <<'PY'
+import importlib.util
+import sys
+
+module_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("battery_dashboard", module_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+assert module.load_history() == [(100, 8.0, 0.0), (160, 7.0, 0.0), (220, 0.0, 12.0)]
+assert module.latest_sample() == (0.0, 12.0)
+assert module.retained_stats() == {"count": 2, "coverageSeconds": 60}
+print("PASS: web dashboard reads the evolved sample schema")
+PY

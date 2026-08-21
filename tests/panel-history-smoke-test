@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+panel="$repo_root/Panel.qml"
+
+assert_panel_contains() {
+  local pattern="$1"
+  local behavior="$2"
+  grep -Fq "$pattern" "$panel" || {
+    printf 'FAIL: panel does not expose %s\n' "$behavior" >&2
+    exit 1
+  }
+}
+
+assert_panel_contains 'text: "BATTERY HISTORY"' 'the battery history section'
+assert_panel_contains 'History will appear after a charge or discharge session.' 'the empty-history state'
+assert_panel_contains 'Loading battery history…' 'the loading state'
+assert_panel_contains 'Battery history is temporarily unavailable.' 'the degraded state'
+assert_panel_contains 'battery-power-history") + " --sessions 7"' 'the seven-day session feed'
+assert_panel_contains 'text: "CHARGING"' 'the charging summary'
+assert_panel_contains 'text: "LAST CHARGE"' 'the latest completed charge detail'
+assert_panel_contains 'root.lastChargeText' 'the last charge time, duration, and percentage gain'
+assert_panel_contains 'text: "DISCHARGE"' 'the completed-discharge summary'
+assert_panel_contains 'root.activeSessionText' 'the current-session status'
+assert_panel_contains 'root.historyStatusText' 'the idle/current-state status'
+assert_panel_contains 'model: root.recentDischargeSessions()' 'the populated session meters'
+assert_panel_contains 'text: "CONSUMPTION"' 'the preserved live graph'
+assert_panel_contains 'text: "STATS"' 'the preserved settings and statistics'
+
+printf 'PASS: native panel history smoke check\n'
