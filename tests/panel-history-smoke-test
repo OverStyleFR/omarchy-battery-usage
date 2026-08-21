@@ -13,6 +13,15 @@ assert_panel_contains() {
   }
 }
 
+assert_panel_excludes() {
+  local pattern="$1"
+  local behavior="$2"
+  if grep -Fq "$pattern" "$panel"; then
+    printf 'FAIL: panel still exposes %s\n' "$behavior" >&2
+    exit 1
+  fi
+}
+
 assert_panel_contains 'text: "BATTERY HISTORY"' 'the battery history section'
 assert_panel_contains 'History will appear after a charge or discharge session.' 'the empty-history state'
 assert_panel_contains 'Loading battery history…' 'the loading state'
@@ -22,8 +31,8 @@ assert_panel_contains 'text: "CHARGING"' 'the charging summary'
 assert_panel_contains 'text: "LAST CHARGE"' 'the latest completed charge detail'
 assert_panel_contains 'BatteryHistory.recentDischargeSessions(batterySessions, 5)' 'the five most recent discharge sessions'
 assert_panel_contains 'Qt.formatDateTime(new Date(epoch * 1000), "ddd d MMM · HH:mm")' 'the date and time on discharge rows'
-assert_panel_contains 'root.lastChargeWhenText' 'the last charge date and time range'
-assert_panel_contains 'root.lastChargeDetailsText' 'the last charge percentage range, duration, and gain'
+assert_panel_contains 'sessionDateTime(lastCompletedCharge.endEpoch)' 'the last charge completion date and time'
+assert_panel_excludes 'lastChargeDetailsText' 'extra last-charge details'
 assert_panel_contains 'text: "DISCHARGE"' 'the completed-discharge summary'
 assert_panel_contains 'root.activeSessionText' 'the current-session status'
 assert_panel_contains 'root.historyStatusText' 'the idle/current-state status'
