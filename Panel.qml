@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Services.UPower
+import "BatteryHistory.js" as BatteryHistory
 import qs.Commons
 import qs.Ui
 
@@ -36,6 +37,10 @@ Panel {
   property int samplesRevision: 0
   property string activeProfile: ""
   property var batteryInfo: ({})
+  property var batterySessions: []
+  property var sessionSummary: ({})
+  property bool sessionHistoryLoaded: false
+  property string sessionHistoryError: ""
   property int statsMinutes: 10
   readonly property var scaleOptions: [10, 30, 60, 180, 360]
   readonly property int graphMinutes: Math.max(5, Math.round(Number(root.setting("graphMinutes", 10))))
@@ -141,6 +146,79 @@ Panel {
   function backfill() {
     if (root.historyLoaded) return
     tailProc.running = true
+  }
+
+  function refreshSessionHistory() {
+    sessionHistoryError = ""
+    sessionProc.running = true
+    sessionSummaryProc.running = true
+  }
+
+  function parseSessions(raw) {
+    batterySessions = BatteryHistory.parseSessions(raw)
+    sessionHistoryLoaded = true
+  }
+
+  function parseSessionSummary(raw) {
+    var next = {}
+    var lines = String(raw || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var parts = lines[i].split("\t")
+      if (parts.length >= 2) next[parts[0]] = Number(parts[1])
+    }
+    sessionSummary = next
+  }
+
+  function recentDischargeSessions() {
+    return BatteryHistory.recentDischargeSessions(batterySessions, 7)
+  }
+
+  function maxRecentDischargeChange() {
+    return BatteryHistory.maxDischargeChange(recentDischargeSessions())
+  }
+
+  function formatSessionDuration(seconds) {
+    return BatteryHistory.formatDuration(seconds)
+  }
+
+  function sessionDate(epoch) {
+    return Qt.formatDateTime(new Date(epoch * 1000), "ddd d MMM")
+  }
+
+  function sessionDateTimeRange(session) {
+    var start = new Date(session.startEpoch * 1000)
+    var end = new Date(session.endEpoch * 1000)
+    return Qt.formatDateTime(start, "ddd d MMM · HH:mm") + "–" + Qt.formatDateTime(end, "HH:mm")
+  }
+
+  function formatPercentageDelta(delta) {
+    if (delta === null || !isFinite(delta)) return ""
+    var rounded = Math.round(delta * 10) / 10
+    var digits = Math.abs(rounded % 1) > 0.01 ? 1 : 0
+    return (rounded > 0 ? "+" : "") + rounded.toFixed(digits) + "%"
+  }
+
+  readonly property string activeSessionText: BatteryHistory.activeSessionText(batterySessions)
+  readonly property var historyPresentation: BatteryHistory.presentationState(
+    sessionHistoryLoaded, sessionHistoryError, batterySessions, stateLabel, UPower.onBattery)
+  readonly property string historyStatusText: historyPresentation.status
+
+  function completedSessionSummaryText(direction) {
+    var count = Number(sessionSummary["completed_" + direction + "_sessions"] || 0)
+    var average = Number(sessionSummary["average_" + direction + "_seconds"] || 0)
+    if (count === 0) return "No completed sessions"
+    return count + (count === 1 ? " session" : " sessions") + " · " + formatSessionDuration(average) + " avg"
+  }
+
+  readonly property string dischargingSummaryText: completedSessionSummaryText("discharge")
+  readonly property string chargingSummaryText: completedSessionSummaryText("charge")
+  readonly property var lastCompletedCharge: BatteryHistory.lastCompletedChargingSession(batterySessions)
+  readonly property string lastChargeText: {
+    if (!lastCompletedCharge) return "No completed charge yet"
+    var gain = formatPercentageDelta(lastCompletedCharge.percentageDelta)
+    return sessionDateTimeRange(lastCompletedCharge)
+      + " · " + formatSessionDuration(lastCompletedCharge.durationSeconds)
+      + (gain.length > 0 ? " · " + gain : "")
   }
 
   function sampleLine(epoch, dischargeWatts, chargeWatts) {
@@ -503,6 +581,36 @@ Panel {
     }
   }
 
+  Process {
+    id: sessionProc
+    command: ["bash", "-lc", root.pluginScript("battery-power-history") + " --sessions 7"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.parseSessions(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.sessionHistoryLoaded = true
+        root.sessionHistoryError = "Battery history is temporarily unavailable."
+      }
+    }
+  }
+
+  Process {
+    id: sessionSummaryProc
+    command: ["bash", "-lc", root.pluginScript("battery-power-history") + " --summary 7"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.parseSessionSummary(text)
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.sessionHistoryLoaded = true
+        root.sessionHistoryError = "Battery history is temporarily unavailable."
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- timers
 
   Timer {
@@ -534,11 +642,19 @@ Panel {
     }
   }
 
+  Timer {
+    interval: 30000
+    repeat: true
+    running: root.opened
+    onTriggered: root.refreshSessionHistory()
+  }
+
   // ------------------------------------------------------------- lifecycle
 
   onOpenedChanged: {
     if (opened) {
       backfill()
+      refreshSessionHistory()
       refreshBatteryInfo()
       refreshProfile()
       recomputeStats()
@@ -660,6 +776,190 @@ Panel {
             font.bold: true
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
+          }
+        }
+
+        // ------------------------------------------------------ history
+        Column {
+          width: parent.width
+          spacing: Style.space(7)
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(historyHeader.implicitHeight, historyRange.implicitHeight)
+
+            Text {
+              id: historyHeader
+              text: "BATTERY HISTORY"
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 1.2
+              anchors.left: parent.left
+            }
+
+            Text {
+              id: historyRange
+              text: "LAST 7 DAYS"
+              color: root.bar.foreground
+              opacity: 0.55
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              anchors.right: parent.right
+            }
+          }
+
+          Text {
+            text: root.historyStatusText
+            color: root.activeSessionText.length > 0 ? Color.accent : root.bar.foreground
+            opacity: root.activeSessionText.length > 0 ? 1 : 0.7
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+          }
+
+          Text {
+            text: "Loading battery history…"
+            visible: root.historyPresentation.loading
+            color: root.bar.foreground
+            opacity: 0.6
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Text {
+            text: "Battery history is temporarily unavailable."
+            visible: root.historyPresentation.degraded
+            color: root.bar.foreground
+            opacity: 0.6
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Text {
+            text: "History will appear after a charge or discharge session."
+            visible: root.historyPresentation.empty
+            color: root.bar.foreground
+            opacity: 0.6
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Row {
+            width: parent.width
+
+            Text {
+              text: "DISCHARGE"
+              color: Color.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 1.0
+            }
+
+            Item { width: Math.max(0, parent.width - parent.children[0].implicitWidth - parent.children[2].implicitWidth); height: 1 }
+
+            Text {
+              text: root.dischargingSummaryText
+              color: root.bar.foreground
+              opacity: 0.75
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Repeater {
+            model: root.recentDischargeSessions()
+
+            Row {
+              required property var modelData
+              width: column.width
+              spacing: Style.space(8)
+
+              Text {
+                width: Style.space(78)
+                text: root.sessionDate(modelData.startEpoch)
+                color: root.bar.foreground
+                opacity: modelData.complete ? 0.65 : 1
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+
+              Rectangle {
+                width: Math.max(Style.space(80), parent.width - Style.space(164))
+                height: Style.space(6)
+                radius: height / 2
+                color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.12)
+                anchors.verticalCenter: parent.verticalCenter
+
+                Rectangle {
+                  width: parent.width * Math.max(0.08, modelData.percentChange / root.maxRecentDischargeChange())
+                  height: parent.height
+                  radius: parent.radius
+                  color: Color.accent
+                }
+              }
+
+              Text {
+                width: Style.space(62)
+                text: root.formatSessionDuration(modelData.durationSeconds) + (modelData.complete ? "" : " · now")
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                horizontalAlignment: Text.AlignRight
+                elide: Text.ElideRight
+              }
+            }
+          }
+
+          Row {
+            width: parent.width
+
+            Text {
+              text: "CHARGING"
+              color: root.chargeGraphColor
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 1.0
+            }
+
+            Item { width: Math.max(0, parent.width - parent.children[0].implicitWidth - parent.children[2].implicitWidth); height: 1 }
+
+            Text {
+              text: root.chargingSummaryText
+              color: root.bar.foreground
+              opacity: 0.75
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(2)
+
+            Text {
+              text: "LAST CHARGE"
+              color: root.chargeGraphColor
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 1.0
+            }
+
+            Text {
+              width: parent.width
+              text: root.lastChargeText
+              color: root.bar.foreground
+              opacity: 0.85
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              elide: Text.ElideRight
+            }
           }
         }
 

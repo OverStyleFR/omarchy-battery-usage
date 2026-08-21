@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+sample_command="$repo_root/scripts/battery-power-sample"
+history_command="$repo_root/scripts/battery-power-history"
+test_root="$(mktemp -d)"
+trap 'rm -rf "$test_root"' EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$1" >&2
+  exit 1
+}
+
+assert_equal() {
+  local expected="$1"
+  local actual="$2"
+  local message="$3"
+  [[ "$actual" == "$expected" ]] || {
+    printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$actual" >&2
+    fail "$message"
+  }
+}
+
+make_supply() {
+  local root="$1"
+  mkdir -p "$root/BAT0" "$root/AC"
+  printf '0\n' >"$root/AC/online"
+}
+
+set_battery() {
+  local root="$1"
+  local status="$2"
+  local percent="$3"
+  local microwatts="$4"
+  local ac_online="$5"
+  printf '%s\n' "$status" >"$root/BAT0/status"
+  printf '%s\n' "$percent" >"$root/BAT0/capacity"
+  printf '%s\n' "$microwatts" >"$root/BAT0/power_now"
+  printf '%s\n' "$ac_online" >"$root/AC/online"
+}
+
+run_sample() {
+  local home="$1"
+  local supply="$2"
+  local epoch="$3"
+  HOME="$home" BATTERY_POWER_SUPPLY_ROOT="$supply" BATTERY_SAMPLE_EPOCH="$epoch" \
+    "$sample_command"
+}
+
+migration_home="$test_root/migration-home"
+migration_supply="$test_root/migration-supply"
+migration_db="$migration_home/.local/state/tomv.battery-usage/power.db"
+mkdir -p "$(dirname "$migration_db")"
+make_supply "$migration_supply"
+sqlite3 "$migration_db" <<'SQL'
+CREATE TABLE samples (
+  epoch INTEGER PRIMARY KEY,
+  discharge_watts REAL NOT NULL,
+  charge_watts REAL NOT NULL
+);
+INSERT INTO samples VALUES(100, 8.5, 0);
+SQL
+set_battery "$migration_supply" Discharging 73 12000000 0
+
+sample_output="$(run_sample "$migration_home" "$migration_supply" 200)"
+assert_equal '200 12.0 0.0' "$sample_output" 'sample output remains backward compatible and supports deterministic time'
+
+migration_output="$(sqlite3 -separator '|' "$migration_db" \
+  "SELECT epoch, CASE WHEN battery_percent IS NULL THEN '' ELSE printf('%.1f', battery_percent) END, COALESCE(power_state, ''), COALESCE(ac_online, '') FROM samples ORDER BY epoch")"
+assert_equal $'100|||\n200|73.0|discharging|0' "$migration_output" 'legacy databases retain rows and gain battery state'
+
+session_home="$test_root/session-home"
+session_supply="$test_root/session-supply"
+make_supply "$session_supply"
+
+set_battery "$session_supply" Discharging 80 10000000 0
+run_sample "$session_home" "$session_supply" 1000 >/dev/null
+set_battery "$session_supply" Discharging 79 12000000 0
+run_sample "$session_home" "$session_supply" 1060 >/dev/null
+set_battery "$session_supply" Charging 79 20000000 1
+run_sample "$session_home" "$session_supply" 1120 >/dev/null
+set_battery "$session_supply" Charging 82 18000000 1
+run_sample "$session_home" "$session_supply" 1180 >/dev/null
+set_battery "$session_supply" Discharging 82 9000000 0
+run_sample "$session_home" "$session_supply" 2000 >/dev/null
+set_battery "$session_supply" Discharging 81 11000000 0
+run_sample "$session_home" "$session_supply" 2060 >/dev/null
+
+sessions="$(HOME="$session_home" BATTERY_HISTORY_NOW=3000 "$history_command" --sessions 7)"
+assert_equal $'state\tstart_epoch\tend_epoch\tstart_percent\tend_percent\tduration_seconds\tcomplete\ndischarging\t1000\t1120\t80.0\t79.0\t120\t1\ncharging\t1120\t1180\t79.0\t82.0\t60\t1\ndischarging\t2000\t2060\t82.0\t81.0\t60\t0' "$sessions" \
+  'history exposes completed and active sessions across transitions and long gaps'
+
+completed_summary="$(HOME="$session_home" BATTERY_HISTORY_NOW=3000 "$history_command" --summary 7)"
+assert_equal $'completed_discharge_sessions\t1\naverage_discharge_seconds\t120\ncompleted_charge_sessions\t1\naverage_charge_seconds\t60' "$completed_summary" \
+  'completed-session averages exclude the active session'
+
+missing_home="$test_root/missing-home"
+missing_supply="$test_root/missing-supply"
+make_supply "$missing_supply"
+printf 'Not charging\n' >"$missing_supply/BAT0/status"
+printf '91\n' >"$missing_supply/BAT0/capacity"
+missing_output="$(run_sample "$missing_home" "$missing_supply" 4000)"
+assert_equal '4000 0.0 0.0' "$missing_output" 'missing power values produce a degraded sample without crashing'
+missing_row="$(sqlite3 -separator '|' "$missing_home/.local/state/tomv.battery-usage/power.db" \
+  "SELECT printf('%.1f', battery_percent), power_state, ac_online FROM samples")"
+assert_equal '91.0|idle|0' "$missing_row" 'degraded samples preserve valid percentage and normalized state'
+
+unknown_home="$test_root/unknown-home"
+unknown_supply="$test_root/unknown-supply"
+make_supply "$unknown_supply"
+printf '55\n' >"$unknown_supply/BAT0/capacity"
+printf '6000000\n' >"$unknown_supply/BAT0/power_now"
+unknown_output="$(run_sample "$unknown_home" "$unknown_supply" 5000)"
+assert_equal '5000 6.0 0.0' "$unknown_output" 'missing status retains the compatible live watts output'
+unknown_state="$(sqlite3 "$unknown_home/.local/state/tomv.battery-usage/power.db" "SELECT power_state FROM samples")"
+assert_equal 'unknown' "$unknown_state" 'missing status does not invent a discharge state'
+unknown_sessions="$(HOME="$unknown_home" BATTERY_HISTORY_NOW=5000 "$history_command" --sessions 7)"
+assert_equal $'state\tstart_epoch\tend_epoch\tstart_percent\tend_percent\tduration_seconds\tcomplete' "$unknown_sessions" \
+  'unknown status does not create a false session'
+
+ac_home="$test_root/ac-home"
+ac_supply="$test_root/ac-supply"
+make_supply "$ac_supply"
+set_battery "$ac_supply" Discharging 70 10000000 0
+run_sample "$ac_home" "$ac_supply" 6000 >/dev/null
+set_battery "$ac_supply" Discharging 69 10000000 0
+run_sample "$ac_home" "$ac_supply" 6060 >/dev/null
+printf '\n' >"$ac_supply/BAT0/status"
+printf '69\n' >"$ac_supply/BAT0/capacity"
+printf '10000000\n' >"$ac_supply/BAT0/power_now"
+printf '1\n' >"$ac_supply/AC/online"
+run_sample "$ac_home" "$ac_supply" 6120 >/dev/null
+ac_sessions="$(HOME="$ac_home" BATTERY_HISTORY_NOW=6120 "$history_command" --sessions 7)"
+assert_equal $'state\tstart_epoch\tend_epoch\tstart_percent\tend_percent\tduration_seconds\tcomplete\ndischarging\t6000\t6120\t70.0\t69.0\t120\t1' "$ac_sessions" \
+  'connecting AC completes a discharge session even if battery status is missing'
+
+chronological="$(HOME="$session_home" "$history_command" 2)"
+assert_equal $'2000 9.0 0.0\n2060 11.0 0.0' "$chronological" 'legacy history remains chronological'
+
+empty_home="$test_root/empty-home"
+mkdir -p "$empty_home"
+empty_sessions="$(HOME="$empty_home" "$history_command" --sessions 7)"
+assert_equal '' "$empty_sessions" 'an empty installation returns empty history without error'
+
+full_home="$test_root/full-home"
+full_supply="$test_root/full-supply"
+make_supply "$full_supply"
+set_battery "$full_supply" Charging 95 14000000 1
+run_sample "$full_home" "$full_supply" 7000 >/dev/null
+set_battery "$full_supply" Charging 100 10000000 1
+run_sample "$full_home" "$full_supply" 7060 >/dev/null
+set_battery "$full_supply" Full 100 0 1
+run_sample "$full_home" "$full_supply" 7120 >/dev/null
+set_battery "$full_supply" Discharging 99 8000000 0
+run_sample "$full_home" "$full_supply" 7180 >/dev/null
+set_battery "$full_supply" Discharging 98 9000000 0
+run_sample "$full_home" "$full_supply" 7240 >/dev/null
+full_sessions="$(HOME="$full_home" BATTERY_HISTORY_NOW=7240 "$history_command" --sessions 7)"
+assert_equal $'state\tstart_epoch\tend_epoch\tstart_percent\tend_percent\tduration_seconds\tcomplete\ncharging\t7000\t7120\t95.0\t100.0\t120\t1\ndischarging\t7180\t7240\t99.0\t98.0\t60\t0' "$full_sessions" \
+  'full-charge idle closes charging before a new discharge session'
+
+partial_home="$test_root/partial-home"
+partial_supply="$test_root/partial-supply"
+mkdir -p "$partial_supply/BAT0"
+printf 'Discharging\n' >"$partial_supply/BAT0/status"
+printf '5000000\n' >"$partial_supply/BAT0/power_now"
+run_sample "$partial_home" "$partial_supply" 8000 >/dev/null
+partial_sessions="$(HOME="$partial_home" BATTERY_HISTORY_NOW=8000 "$history_command" --sessions 7)"
+assert_equal $'state\tstart_epoch\tend_epoch\tstart_percent\tend_percent\tduration_seconds\tcomplete\ndischarging\t8000\t8000\t\t\t0\t0' "$partial_sessions" \
+  'missing percentage and AC sysfs values remain representable'
+
+range_home="$test_root/range-home"
+range_supply="$test_root/range-supply"
+make_supply "$range_supply"
+set_battery "$range_supply" Discharging 90 7000000 0
+run_sample "$range_home" "$range_supply" 100000 >/dev/null
+set_battery "$range_supply" Discharging 60 6000000 0
+run_sample "$range_home" "$range_supply" 999900 >/dev/null
+range_sessions="$(HOME="$range_home" BATTERY_HISTORY_NOW=1000000 "$history_command" --sessions 7)"
+assert_equal $'state\tstart_epoch\tend_epoch\tstart_percent\tend_percent\tduration_seconds\tcomplete\ndischarging\t999900\t999900\t60.0\t60.0\t0\t0' "$range_sessions" \
+  'the default seven-day range excludes older sessions'
+
+printf 'PASS: battery history command contract\n'

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+test_cache="$(mktemp -d)"
+trap 'rm -rf "$test_cache"' EXIT
+
+bash "$repo_root/tests/battery-history-test"
+bash "$repo_root/tests/panel-history-smoke-test"
+node "$repo_root/tests/history-presentation-test.js"
+bash "$repo_root/tests/webapp-schema-compatibility-test"
+bash -n "$repo_root/scripts/battery-power-sample" "$repo_root/scripts/battery-power-history"
+PYTHONPYCACHEPREFIX="$test_cache" python3 -m py_compile "$repo_root/webapp/server.py"
+
+printf 'PASS: full test suite\n'
