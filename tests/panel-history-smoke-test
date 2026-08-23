@@ -26,6 +26,7 @@ assert_panel_contains 'text: "BATTERY ACTIVITY"' 'the compact battery activity s
 assert_panel_contains 'label: "Last time on battery"' 'the previous unplugged metric'
 assert_panel_contains 'label: "Last charging time"' 'the completed charging metric'
 assert_panel_contains 'return "Time on battery now"' 'the live unplugged metric'
+assert_panel_contains 'BatteryHistory.continuousSampleSeconds(root.batteryActivityLoadedAt, root.nowEpoch)' 'sleep-safe live unplugged elapsed time'
 assert_panel_contains 'battery-power-history") + " --activity 7"' 'the activity summary feed'
 assert_panel_contains 'BatteryHistory.batteryActivityPresentation' 'the activity presentation boundary'
 assert_panel_contains 'ratio: root.activityPresentation.lastTimeOnBattery.ratio' 'the normalized comparison bars'

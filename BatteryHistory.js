@@ -18,6 +18,14 @@ var chargingStatusMessages = [
   "Recharging"
 ]
 
+var MAX_CONTINUOUS_SAMPLE_GAP_SECONDS = 60
+
+function continuousSampleSeconds(startEpoch, endEpoch) {
+  var seconds = Number(endEpoch) - Number(startEpoch)
+  if (!isFinite(seconds) || seconds <= 0 || seconds > MAX_CONTINUOUS_SAMPLE_GAP_SECONDS) return 0
+  return seconds
+}
+
 function normalizedRandom(value) {
   var number = Number(value)
   if (!isFinite(number)) return 0
@@ -59,6 +67,8 @@ function batteryActivitySummary(observations, now) {
   }
   var list = observations || []
   var unpluggedStart = null
+  var unpluggedSeconds = 0
+  var lastUnpluggedObservation = null
   var chargingStart = null
   var lastChargingObservation = null
 
@@ -68,11 +78,22 @@ function batteryActivitySummary(observations, now) {
     if (!isFinite(epoch)) continue
 
     if (item.acOnline === 0) {
-      if (unpluggedStart == null) unpluggedStart = epoch
+      if (unpluggedStart == null) {
+        unpluggedStart = epoch
+        unpluggedSeconds = 0
+      } else if (lastUnpluggedObservation != null) {
+        unpluggedSeconds += continuousSampleSeconds(lastUnpluggedObservation, epoch)
+      }
+      lastUnpluggedObservation = epoch
     } else if (item.acOnline === 1 && unpluggedStart != null) {
-      var unpluggedDuration = epoch - unpluggedStart
+      var unpluggedDuration = unpluggedSeconds + continuousSampleSeconds(lastUnpluggedObservation, epoch)
       if (isFinite(unpluggedDuration) && unpluggedDuration > 0) result.lastTimeOnBattery = unpluggedDuration
       unpluggedStart = null
+      unpluggedSeconds = 0
+      lastUnpluggedObservation = null
+    } else if (item.acOnline !== 1 && unpluggedStart != null) {
+      // An unknown AC observation cannot prove the laptop stayed awake.
+      lastUnpluggedObservation = null
     }
 
     if (item.powerState === "charging") {
@@ -91,8 +112,10 @@ function batteryActivitySummary(observations, now) {
   }
 
   if (list.length > 0 && list[list.length - 1].acOnline === 0 && unpluggedStart != null) {
-    var activeDuration = Number(now) - unpluggedStart
-    if (isFinite(activeDuration) && activeDuration >= 0) result.currentTimeOnBattery = activeDuration
+    var currentEpoch = Number(now)
+    if (isFinite(currentEpoch) && lastUnpluggedObservation != null && currentEpoch >= lastUnpluggedObservation) {
+      result.currentTimeOnBattery = unpluggedSeconds + continuousSampleSeconds(lastUnpluggedObservation, currentEpoch)
+    }
   }
   if (list.length > 0 && list[list.length - 1].acOnline === 1 &&
       list[list.length - 1].powerState === "charging" && chargingStart != null) {
@@ -447,6 +470,7 @@ if (typeof module !== "undefined") {
     batteryActivitySummary: batteryActivitySummary,
     chargingStatusMessages: chargingStatusMessages,
     chargingStatusRotationInterval: chargingStatusRotationInterval,
+    continuousSampleSeconds: continuousSampleSeconds,
     externalPowerConnected: externalPowerConnected,
     formatDuration: formatDuration,
     lastCompletedChargingSession: lastCompletedChargingSession,

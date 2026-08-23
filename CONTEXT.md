@@ -29,5 +29,5 @@ How long a finished charging session or discharging session lasted. A discarded 
 _Avoid_: remaining time, elapsed session time
 
 **Unplugged interval**:
-A period from an observed AC disconnection until the next observed AC reconnection. It is based on connection state, not energy flow, and can include incomplete or idle battery-state observations. `Last time on battery` is the most recent completed unplugged interval; `Time on battery now` is the current open one.
+A period from an observed AC disconnection until the next observed AC reconnection. It is based on connection state, not energy flow, and can include incomplete or idle battery-state observations. Its elapsed time sums continuously sampled slices and excludes gaps longer than one minute, when the laptop is assumed to be off or suspended. `Last time on battery` is the most recent completed unplugged interval; `Time on battery now` is the current open one.
 _Avoid_: discharging session, charging session

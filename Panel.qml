@@ -201,7 +201,8 @@ Panel {
     lastTimeOnBattery: root.batteryActivity.lastTimeOnBattery,
     lastChargingDuration: root.batteryActivity.lastChargingDuration,
     currentTimeOnBattery: !root.externalPowerConnected && root.batteryActivity.currentTimeOnBattery != null
-      ? root.batteryActivity.currentTimeOnBattery + Math.max(0, root.nowEpoch - root.batteryActivityLoadedAt)
+      ? root.batteryActivity.currentTimeOnBattery
+        + BatteryHistory.continuousSampleSeconds(root.batteryActivityLoadedAt, root.nowEpoch)
       : null,
     lastChargeAt: root.batteryActivity.lastChargeAt,
     currentChargingDuration: root.currentChargingDuration

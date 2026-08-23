@@ -96,8 +96,8 @@ assert_equal $'completed_discharge_sessions\t1\naverage_discharge_seconds\t120\n
   'completed-session averages exclude the active session'
 
 activity_summary="$(HOME="$session_home" BATTERY_HISTORY_NOW=3000 "$history_command" --activity 7)"
-assert_equal $'last_time_on_battery_seconds\t120\nlast_charging_duration_seconds\t60\ncurrent_time_on_battery_seconds\t1000\nlast_charge_at\t1180\ncurrent_charging_started_at\t\ncurrent_charging_duration_seconds\t' "$activity_summary" \
-  'activity summary distinguishes AC-disconnected intervals from charging-state time'
+assert_equal $'last_time_on_battery_seconds\t120\nlast_charging_duration_seconds\t60\ncurrent_time_on_battery_seconds\t60\nlast_charge_at\t1180\ncurrent_charging_started_at\t\ncurrent_charging_duration_seconds\t' "$activity_summary" \
+  'activity summary excludes unobserved time from the current AC-disconnected interval'
 
 missing_home="$test_root/missing-home"
 missing_supply="$test_root/missing-supply"
