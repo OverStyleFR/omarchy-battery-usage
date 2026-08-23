@@ -9,17 +9,17 @@ assert.deepEqual(
   history.batteryActivitySummary(
     [
       observation(100, "discharging", 0),
-      observation(400, "charging", 1),
-      observation(700, "idle", 1),
-      observation(1000, "discharging", 0),
+      observation(160, "charging", 1),
+      observation(220, "idle", 1),
+      observation(280, "discharging", 0),
     ],
-    1300
+    340
   ),
   {
-    lastTimeOnBattery: 300,
-    lastChargingDuration: 300,
-    currentTimeOnBattery: 300,
-    lastChargeAt: 700,
+    lastTimeOnBattery: 60,
+    lastChargingDuration: 60,
+    currentTimeOnBattery: 60,
+    lastChargeAt: 220,
     currentChargingStartedAt: null,
     currentChargingDuration: null,
   },
@@ -63,19 +63,43 @@ assert.deepEqual(
       observation(220, "idle", 1),
       observation(5000, "idle", 1),
       observation(5100, "discharging", 0),
+      observation(5160, "discharging", 0),
       observation(9000, "discharging", 0),
+      observation(9060, "discharging", 0),
     ],
-    9300
+    9120
   ),
   {
     lastTimeOnBattery: null,
     lastChargingDuration: 120,
-    currentTimeOnBattery: 4200,
+    currentTimeOnBattery: 180,
     lastChargeAt: 220,
     currentChargingStartedAt: null,
     currentChargingDuration: null,
   },
-  "connected idle time does not extend charging and an open interval survives a long gap"
+  "current time on battery excludes an unobserved suspend or shutdown gap"
+);
+
+assert.equal(
+  history.batteryActivitySummary(
+    [
+      observation(100, "discharging", 0),
+      observation(160, "discharging", 0),
+      observation(5000, "discharging", 0),
+      observation(5060, "discharging", 0),
+      observation(5120, "charging", 1),
+    ],
+    5120
+  ).lastTimeOnBattery,
+  180,
+  "last time on battery excludes an unobserved suspend or shutdown gap"
+);
+
+assert.equal(history.continuousSampleSeconds(100, 160), 60);
+assert.equal(
+  history.continuousSampleSeconds(100, 161),
+  0,
+  "live elapsed time does not jump forward after sampling was paused"
 );
 
 assert.deepEqual(

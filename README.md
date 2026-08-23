@@ -126,6 +126,10 @@ pending-charge) close an active session. Unknown samples are ignored for
 boundaries so a temporarily unreadable sysfs value does not create a false
 transition.
 
+`Time on battery now` and `Last time on battery` measure the awake portions of
+an AC-disconnected interval. Gaps between samples longer than one minute are
+excluded so time spent shut down or suspended is not counted.
+
 The current charge or discharge session appears in the panel but is excluded
 from completed-session averages. Existing databases are migrated additively on
 the next sample, preserving their watts history; legacy rows simply have no
