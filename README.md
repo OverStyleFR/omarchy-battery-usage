@@ -118,10 +118,13 @@ Data is stored in `~/.local/state/tomv.battery-usage/power.db`.
 
 Each persisted sample includes battery percentage and a normalized power state
 (`charging`, `discharging`, `idle`, or `unknown`). A session starts when
-charging or discharging begins. A state transition or a gap longer than five
-minutes completes the previous session; idle samples close an active session.
-Unknown samples are ignored for boundaries so a temporarily unreadable sysfs
-value does not create a false transition.
+charging or discharging begins. A switch to the opposite energy-flow direction
+shorter than five minutes is a session interruption: the original session
+resumes and the blip is discarded. A sampling gap longer than five minutes still
+completes the previous session. Idle samples (fully charged, holding,
+pending-charge) close an active session. Unknown samples are ignored for
+boundaries so a temporarily unreadable sysfs value does not create a false
+transition.
 
 The current charge or discharge session appears in the panel but is excluded
 from completed-session averages. Existing databases are migrated additively on

@@ -38,7 +38,7 @@ Panel {
   property string activeProfile: ""
   property var batteryInfo: ({})
   property var batterySessions: []
-  property var sessionSummary: ({})
+  readonly property var sessionSummary: BatteryHistory.sessionSummaryFromSessions(root.displaySessions)
   property bool sessionHistoryLoaded: false
   property string sessionHistoryError: ""
   property int statsMinutes: 10
@@ -151,7 +151,6 @@ Panel {
   function refreshSessionHistory() {
     sessionHistoryError = ""
     sessionProc.running = true
-    sessionSummaryProc.running = true
   }
 
   function parseSessions(raw) {
@@ -159,18 +158,8 @@ Panel {
     sessionHistoryLoaded = true
   }
 
-  function parseSessionSummary(raw) {
-    var next = {}
-    var lines = String(raw || "").split("\n")
-    for (var i = 0; i < lines.length; i++) {
-      var parts = lines[i].split("\t")
-      if (parts.length >= 2) next[parts[0]] = Number(parts[1])
-    }
-    sessionSummary = next
-  }
-
   function recentDischargeSessions() {
-    return BatteryHistory.recentDischargeSessions(batterySessions, 5)
+    return BatteryHistory.recentDischargeSessions(root.displaySessions, 5)
   }
 
   function maxRecentDischargeChange() {
@@ -189,9 +178,13 @@ Panel {
     return Qt.formatDateTime(new Date(epoch * 1000), "ddd d MMM · HH:mm")
   }
 
-  readonly property string activeSessionText: BatteryHistory.activeSessionText(batterySessions)
+  property double nowMs: Date.now()
+  readonly property int nowEpoch: Math.floor(root.nowMs / 1000)
+  readonly property var displaySessions: BatteryHistory.mergeSessionInterruptions(
+    root.batterySessions, root.nowEpoch, String(root.batteryInfo.state || ""))
+  readonly property string activeSessionText: BatteryHistory.activeSessionText(root.displaySessions, String(root.batteryInfo.state || ""), root.nowEpoch)
   readonly property var historyPresentation: BatteryHistory.presentationState(
-    sessionHistoryLoaded, sessionHistoryError, batterySessions, stateLabel, UPower.onBattery)
+    sessionHistoryLoaded, sessionHistoryError, root.displaySessions, String(root.batteryInfo.state || ""), root.nowEpoch)
   readonly property string historyStatusText: historyPresentation.status
 
   function completedSessionSummaryText(direction) {
@@ -203,7 +196,7 @@ Panel {
 
   readonly property string dischargingSummaryText: completedSessionSummaryText("discharge")
   readonly property string chargingSummaryText: completedSessionSummaryText("charge")
-  readonly property var lastCompletedCharge: BatteryHistory.lastCompletedChargingSession(batterySessions)
+  readonly property var lastCompletedCharge: BatteryHistory.lastCompletedChargingSession(root.displaySessions)
   readonly property string lastChargeText: {
     if (!lastCompletedCharge) return "No completed charge yet"
     return sessionDateTime(lastCompletedCharge.endEpoch)
@@ -584,21 +577,6 @@ Panel {
     }
   }
 
-  Process {
-    id: sessionSummaryProc
-    command: ["bash", "-lc", root.pluginScript("battery-power-history") + " --summary 7"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.parseSessionSummary(text)
-    }
-    onExited: function(exitCode) {
-      if (exitCode !== 0) {
-        root.sessionHistoryLoaded = true
-        root.sessionHistoryError = "Battery history is temporarily unavailable."
-      }
-    }
-  }
-
   // ---------------------------------------------------------------- timers
 
   Timer {
@@ -635,6 +613,14 @@ Panel {
     repeat: true
     running: root.opened
     onTriggered: root.refreshSessionHistory()
+  }
+
+  Timer {
+    interval: 1000
+    running: root.opened
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: root.nowMs = Date.now()
   }
 
   // ------------------------------------------------------------- lifecycle
