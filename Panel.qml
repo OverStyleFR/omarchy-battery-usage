@@ -37,15 +37,16 @@ Panel {
   property int samplesRevision: 0
   property string activeProfile: ""
   property var batteryInfo: ({})
-  property var batterySessions: []
-  readonly property var sessionSummary: BatteryHistory.sessionSummaryFromSessions(root.displaySessions)
-  property bool sessionHistoryLoaded: false
-  property string sessionHistoryError: ""
+  property var batteryActivity: ({})
+  property bool batteryActivityLoaded: false
+  property string batteryActivityError: ""
+  property int batteryActivityLoadedAt: 0
   property int statsMinutes: 10
   readonly property var scaleOptions: [10, 30, 60, 180, 360]
   readonly property int graphMinutes: Math.max(5, Math.round(Number(root.setting("graphMinutes", 10))))
   readonly property int profileRefreshSec: Math.max(5, Math.round(Number(root.setting("profileRefreshSec", 30))))
   readonly property int panelRefreshSec: Math.max(1, Math.round(Number(root.setting("panelRefreshSec", 5))))
+  readonly property bool reducedMotion: root.setting("reducedMotion", false) === true
   property bool historyLoaded: false
   property real graphHoverX: -1
   readonly property color chargeGraphColor: {
@@ -109,6 +110,11 @@ Panel {
     var s = String(batteryInfo.state || "")
     return UPower.onBattery && s !== "charging" && s !== "holding"
   }
+  readonly property bool externalPowerConnected: BatteryHistory.externalPowerConnected(
+    String(root.batteryInfo.state || ""), UPower.onBattery)
+  readonly property bool activelyCharging: {
+    return BatteryHistory.activelyCharging(String(root.batteryInfo.state || ""), UPower.onBattery)
+  }
   readonly property string timeLabel: {
     if (String(batteryInfo.state || "") === "holding") return "—"
     return batteryInfo.time || "—"
@@ -148,30 +154,30 @@ Panel {
     tailProc.running = true
   }
 
-  function refreshSessionHistory() {
-    sessionHistoryError = ""
-    sessionProc.running = true
+  function refreshBatteryActivity() {
+    batteryActivityError = ""
+    activityProc.running = true
   }
 
-  function parseSessions(raw) {
-    batterySessions = BatteryHistory.parseSessions(raw)
-    sessionHistoryLoaded = true
-  }
-
-  function recentDischargeSessions() {
-    return BatteryHistory.recentDischargeSessions(root.displaySessions, 5)
-  }
-
-  function maxRecentDischargeChange() {
-    return BatteryHistory.maxDischargeChange(recentDischargeSessions())
-  }
-
-  function formatSessionDuration(seconds) {
-    return BatteryHistory.formatDuration(seconds)
-  }
-
-  function sessionDate(epoch) {
-    return Qt.formatDateTime(new Date(epoch * 1000), "ddd d MMM · HH:mm")
+  function parseBatteryActivity(raw) {
+    var next = {}
+    var lines = String(raw || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var parts = lines[i].split("\t")
+      if (parts.length !== 2) continue
+      var value = Number(parts[1])
+      next[parts[0]] = parts[1] !== "" && isFinite(value) ? value : null
+    }
+    batteryActivity = {
+      lastTimeOnBattery: next.last_time_on_battery_seconds,
+      lastChargingDuration: next.last_charging_duration_seconds,
+      currentTimeOnBattery: next.current_time_on_battery_seconds,
+      lastChargeAt: next.last_charge_at,
+      currentChargingStartedAt: next.current_charging_started_at,
+      currentChargingDuration: next.current_charging_duration_seconds
+    }
+    batteryActivityLoadedAt = nowEpoch
+    batteryActivityLoaded = true
   }
 
   function sessionDateTime(epoch) {
@@ -180,26 +186,48 @@ Panel {
 
   property double nowMs: Date.now()
   readonly property int nowEpoch: Math.floor(root.nowMs / 1000)
-  readonly property var displaySessions: BatteryHistory.mergeSessionInterruptions(
-    root.batterySessions, root.nowEpoch, String(root.batteryInfo.state || ""))
-  readonly property string activeSessionText: BatteryHistory.activeSessionText(root.displaySessions, String(root.batteryInfo.state || ""), root.nowEpoch)
-  readonly property var historyPresentation: BatteryHistory.presentationState(
-    sessionHistoryLoaded, sessionHistoryError, root.displaySessions, String(root.batteryInfo.state || ""), root.nowEpoch)
-  readonly property string historyStatusText: historyPresentation.status
-
-  function completedSessionSummaryText(direction) {
-    var count = Number(sessionSummary["completed_" + direction + "_sessions"] || 0)
-    var average = Number(sessionSummary["average_" + direction + "_seconds"] || 0)
-    if (count === 0) return "No completed sessions"
-    return count + (count === 1 ? " session" : " sessions") + " · " + formatSessionDuration(average) + " avg"
+  readonly property var chargingStatusMessages: BatteryHistory.chargingStatusMessages
+  property string currentChargingMessage: "Charging"
+  property int liveChargingStartedAt: 0
+  readonly property var currentChargingStartedAt: root.batteryActivity.currentChargingStartedAt
+  readonly property var currentChargingDuration: {
+    if (!root.activelyCharging) return null
+    if (root.batteryActivity.currentChargingDuration != null) {
+      return root.batteryActivity.currentChargingDuration + Math.max(0, root.nowEpoch - root.batteryActivityLoadedAt)
+    }
+    return root.liveChargingStartedAt > 0 ? Math.max(0, root.nowEpoch - root.liveChargingStartedAt) : 0
   }
-
-  readonly property string dischargingSummaryText: completedSessionSummaryText("discharge")
-  readonly property string chargingSummaryText: completedSessionSummaryText("charge")
-  readonly property var lastCompletedCharge: BatteryHistory.lastCompletedChargingSession(root.displaySessions)
+  readonly property var liveBatteryActivity: ({
+    lastTimeOnBattery: root.batteryActivity.lastTimeOnBattery,
+    lastChargingDuration: root.batteryActivity.lastChargingDuration,
+    currentTimeOnBattery: !root.externalPowerConnected && root.batteryActivity.currentTimeOnBattery != null
+      ? root.batteryActivity.currentTimeOnBattery + Math.max(0, root.nowEpoch - root.batteryActivityLoadedAt)
+      : null,
+    lastChargeAt: root.batteryActivity.lastChargeAt,
+    currentChargingDuration: root.currentChargingDuration
+  })
+  readonly property var activityPresentation: BatteryHistory.batteryActivityPresentation(root.liveBatteryActivity)
+  readonly property var completedActivityMetrics: [
+    { label: "Last time on battery", value: root.activityPresentation.lastTimeOnBattery.value,
+      ratio: root.activityPresentation.lastTimeOnBattery.ratio, color: Color.accent, active: false },
+    { label: "Last charging time", value: root.activityPresentation.lastChargingDuration.value,
+      ratio: root.activityPresentation.lastChargingDuration.ratio, color: root.chargeGraphColor, active: false }
+  ]
+  readonly property string currentActivityLabel: {
+    if (root.activelyCharging) return root.reducedMotion ? "Charging" : root.currentChargingMessage
+    if (String(root.batteryInfo.state || "") === "fully-charged") return "Fully charged"
+    if (root.externalPowerConnected) return "Plugged in"
+    return "Time on battery now"
+  }
+  readonly property string currentActivityValue: root.activelyCharging
+    ? root.activityPresentation.currentChargingDuration.value
+    : root.activityPresentation.currentTimeOnBattery.value
+  readonly property real currentActivityRatio: root.activelyCharging
+    ? root.activityPresentation.currentChargingDuration.ratio
+    : root.activityPresentation.currentTimeOnBattery.ratio
   readonly property string lastChargeText: {
-    if (!lastCompletedCharge) return "No completed charge yet"
-    return sessionDateTime(lastCompletedCharge.endEpoch)
+    if (root.activityPresentation.lastChargeAt == null) return "—"
+    return root.sessionDateTime(root.activityPresentation.lastChargeAt)
   }
 
   function sampleLine(epoch, dischargeWatts, chargeWatts) {
@@ -563,16 +591,16 @@ Panel {
   }
 
   Process {
-    id: sessionProc
-    command: ["bash", "-lc", root.pluginScript("battery-power-history") + " --sessions 7"]
+    id: activityProc
+    command: ["bash", "-lc", root.pluginScript("battery-power-history") + " --activity 7"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.parseSessions(text)
+      onStreamFinished: root.parseBatteryActivity(text)
     }
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        root.sessionHistoryLoaded = true
-        root.sessionHistoryError = "Battery history is temporarily unavailable."
+        root.batteryActivityLoaded = true
+        root.batteryActivityError = "Battery history is temporarily unavailable."
       }
     }
   }
@@ -612,7 +640,7 @@ Panel {
     interval: 30000
     repeat: true
     running: root.opened
-    onTriggered: root.refreshSessionHistory()
+    onTriggered: root.refreshBatteryActivity()
   }
 
   Timer {
@@ -623,12 +651,59 @@ Panel {
     onTriggered: root.nowMs = Date.now()
   }
 
+  Timer {
+    id: chargingPhraseTimer
+    interval: BatteryHistory.chargingStatusRotationInterval(Math.random())
+    running: root.opened && root.activelyCharging && !root.reducedMotion
+    repeat: true
+    onTriggered: {
+      interval = BatteryHistory.chargingStatusRotationInterval(Math.random())
+      chargingPhraseSwap.restart()
+    }
+  }
+
+  SequentialAnimation {
+    id: chargingPhraseSwap
+    ParallelAnimation {
+      PropertyAnimation { target: chargingPhrase; property: "opacity"; to: 0; duration: 120; easing.type: Easing.OutQuad }
+      PropertyAnimation { target: chargingPhrase; property: "y"; to: 4; duration: 120; easing.type: Easing.OutQuad }
+    }
+    ScriptAction {
+      script: {
+        root.currentChargingMessage = BatteryHistory.nextChargingStatusMessage(
+          root.currentChargingMessage, Math.random())
+        chargingPhrase.y = -4
+      }
+    }
+    ParallelAnimation {
+      PropertyAnimation { target: chargingPhrase; property: "opacity"; to: 1; duration: 120; easing.type: Easing.InQuad }
+      PropertyAnimation { target: chargingPhrase; property: "y"; to: 0; duration: 120; easing.type: Easing.InQuad }
+    }
+  }
+
+  Connections {
+    target: root
+    function onActivelyChargingChanged() {
+      root.refreshBatteryActivity()
+      if (!root.activelyCharging) {
+        chargingPhraseSwap.stop()
+        chargingPhrase.opacity = 1
+        chargingPhrase.y = 0
+        root.currentChargingMessage = "Charging"
+        root.liveChargingStartedAt = 0
+      } else {
+        root.liveChargingStartedAt = root.nowEpoch
+        chargingPhraseTimer.interval = BatteryHistory.chargingStatusRotationInterval(Math.random())
+      }
+    }
+  }
+
   // ------------------------------------------------------------- lifecycle
 
   onOpenedChanged: {
     if (opened) {
       backfill()
-      refreshSessionHistory()
+      refreshBatteryActivity()
       refreshBatteryInfo()
       refreshProfile()
       recomputeStats()
@@ -638,6 +713,7 @@ Panel {
 
   onBatteryPresentChanged: if (!batteryPresent) close()
   onShowWidgetChanged: if (!showWidget) close()
+  onDischargingChanged: if (opened) refreshBatteryActivity()
   onStatsMinutesChanged: {
     recomputeStats()
     updateTrend()
@@ -753,50 +829,23 @@ Panel {
           }
         }
 
-        // ------------------------------------------------------ history
+        // ------------------------------------------------------ activity
         Column {
           width: parent.width
-          spacing: Style.space(7)
-
-          Item {
-            width: parent.width
-            implicitHeight: Math.max(historyHeader.implicitHeight, historyRange.implicitHeight)
-
-            Text {
-              id: historyHeader
-              text: "BATTERY HISTORY"
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 1.2
-              anchors.left: parent.left
-            }
-
-            Text {
-              id: historyRange
-              text: "LAST 7 DAYS"
-              color: root.bar.foreground
-              opacity: 0.55
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              anchors.right: parent.right
-            }
-          }
+          spacing: Style.space(8)
 
           Text {
-            text: root.historyStatusText
-            color: root.activeSessionText.length > 0 ? Color.accent : root.bar.foreground
-            opacity: root.activeSessionText.length > 0 ? 1 : 0.7
+            text: "BATTERY ACTIVITY"
+            color: Qt.darker(root.bar.foreground, 1.4)
             font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: Style.font.caption
             font.bold: true
+            font.letterSpacing: 1.2
           }
 
           Text {
             text: "Loading battery history…"
-            visible: root.historyPresentation.loading
+            visible: !root.batteryActivityLoaded && root.batteryActivityError.length === 0
             color: root.bar.foreground
             opacity: 0.6
             font.family: root.bar.fontFamily
@@ -805,110 +854,134 @@ Panel {
 
           Text {
             text: "Battery history is temporarily unavailable."
-            visible: root.historyPresentation.degraded
+            visible: root.batteryActivityError.length > 0
             color: root.bar.foreground
             opacity: 0.6
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
-          }
-
-          Text {
-            text: "History will appear after a charge or discharge session."
-            visible: root.historyPresentation.empty
-            color: root.bar.foreground
-            opacity: 0.6
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          Row {
-            width: parent.width
-
-            Text {
-              text: "DISCHARGE"
-              color: Color.accent
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 1.0
-            }
-
-            Item { width: Math.max(0, parent.width - parent.children[0].implicitWidth - parent.children[2].implicitWidth); height: 1 }
-
-            Text {
-              text: root.dischargingSummaryText
-              color: root.bar.foreground
-              opacity: 0.75
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-            }
           }
 
           Repeater {
-            model: root.recentDischargeSessions()
+            model: root.completedActivityMetrics
 
-            Row {
+            Column {
               required property var modelData
               width: column.width
-              spacing: Style.space(8)
+              spacing: Style.space(4)
 
-              Text {
-                width: Style.space(124)
-                text: root.sessionDate(modelData.startEpoch)
-                color: root.bar.foreground
-                opacity: modelData.complete ? 0.65 : 1
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
-              }
+              Row {
+                width: parent.width
 
-              Rectangle {
-                width: Math.max(Style.space(60), parent.width - Style.space(210))
-                height: Style.space(6)
-                radius: height / 2
-                color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.12)
-                anchors.verticalCenter: parent.verticalCenter
+                Text {
+                  text: modelData.label
+                  color: modelData.active ? Color.accent : root.bar.foreground
+                  opacity: modelData.active ? 1 : 0.78
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: modelData.active
+                }
 
-                Rectangle {
-                  width: parent.width * Math.max(0.08, modelData.percentChange / root.maxRecentDischargeChange())
-                  height: parent.height
-                  radius: parent.radius
-                  color: Color.accent
+                Item { width: Math.max(0, parent.width - parent.children[0].implicitWidth - parent.children[2].implicitWidth); height: 1 }
+
+                Text {
+                  text: modelData.value
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  horizontalAlignment: Text.AlignRight
                 }
               }
 
-              Text {
-                width: Style.space(62)
-                text: root.formatSessionDuration(modelData.durationSeconds) + (modelData.complete ? "" : " · now")
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-                horizontalAlignment: Text.AlignRight
-                elide: Text.ElideRight
+              Rectangle {
+                width: parent.width
+                height: Style.space(6)
+                radius: height / 2
+                color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.1)
+                border.width: modelData.active ? 1 : 0
+                border.color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35)
+
+                Rectangle {
+                  width: parent.width * modelData.ratio
+                  height: parent.height
+                  radius: parent.radius
+                  color: modelData.color
+                  opacity: modelData.active ? 1 : 0.82
+                }
               }
             }
           }
 
-          Row {
+          Column {
             width: parent.width
+            spacing: Style.space(4)
 
-            Text {
-              text: "CHARGING"
-              color: root.chargeGraphColor
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 1.0
+            Row {
+              width: parent.width
+
+              Item {
+                width: Style.space(190)
+                height: Math.max(chargingPhrase.implicitHeight, staticCurrentLabel.implicitHeight)
+
+                Text {
+                  id: chargingPhrase
+                  anchors.left: parent.left
+                  y: 0
+                  visible: root.activelyCharging
+                  text: (root.reducedMotion ? "Charging" : root.currentChargingMessage) + " ·"
+                  color: root.chargeGraphColor
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  elide: Text.ElideRight
+                  width: parent.width
+                }
+
+                Text {
+                  id: staticCurrentLabel
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: !root.activelyCharging
+                  text: root.currentActivityLabel
+                  color: root.activityPresentation.currentTimeOnBattery.seconds != null ? Color.accent : root.bar.foreground
+                  opacity: root.activityPresentation.currentTimeOnBattery.seconds != null ? 1 : 0.78
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: root.activityPresentation.currentTimeOnBattery.seconds != null
+                }
+              }
+
+              Item { width: Math.max(0, parent.width - parent.children[0].width - parent.children[2].implicitWidth); height: 1 }
+
+              Text {
+                text: root.currentActivityValue
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                horizontalAlignment: Text.AlignRight
+              }
             }
 
-            Item { width: Math.max(0, parent.width - parent.children[0].implicitWidth - parent.children[2].implicitWidth); height: 1 }
+            Rectangle {
+              width: parent.width
+              height: Style.space(6)
+              radius: height / 2
+              color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.1)
+              border.width: root.activelyCharging || root.activityPresentation.currentTimeOnBattery.seconds != null ? 1 : 0
+              border.color: Qt.rgba(
+                root.activelyCharging ? root.chargeGraphColor.r : Color.accent.r,
+                root.activelyCharging ? root.chargeGraphColor.g : Color.accent.g,
+                root.activelyCharging ? root.chargeGraphColor.b : Color.accent.b,
+                0.35)
 
-            Text {
-              text: root.chargingSummaryText
-              color: root.bar.foreground
-              opacity: 0.75
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
+              Rectangle {
+                width: parent.width * root.currentActivityRatio
+                height: parent.height
+                radius: parent.radius
+                color: root.activelyCharging ? root.chargeGraphColor : Color.accent
+                opacity: 1
+              }
             }
           }
 
@@ -919,6 +992,7 @@ Panel {
             Text {
               text: "LAST CHARGE"
               color: root.chargeGraphColor
+              opacity: 0.8
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true
@@ -929,7 +1003,7 @@ Panel {
               width: parent.width
               text: root.lastChargeText
               color: root.bar.foreground
-              opacity: 0.85
+              opacity: 0.7
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
               elide: Text.ElideRight

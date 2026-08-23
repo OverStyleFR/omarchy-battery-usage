@@ -6,6 +6,7 @@ test_cache="$(mktemp -d)"
 trap 'rm -rf "$test_cache"' EXIT
 
 bash "$repo_root/tests/battery-history-test"
+node "$repo_root/tests/battery-activity-test.js"
 bash "$repo_root/tests/panel-history-smoke-test"
 node "$repo_root/tests/history-presentation-test.js"
 bash "$repo_root/tests/webapp-schema-compatibility-test"
