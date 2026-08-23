@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # With no option, print recent samples in the legacy format. --sessions emits
 # tab-separated charge/discharge sessions for the native history panel, and
-# --summary emits completed-session counts and average durations.
+# --summary emits completed-session counts and average durations. --activity
+# emits the compact AC-connection and charging-state activity contract.
 set -euo pipefail
 
 db="${BATTERY_POWER_DB:-$HOME/.local/state/tomv.battery-usage/power.db}"
 [[ -f "$db" ]] || exit 0
 
 mode="${1:-samples}"
-if [[ "$mode" != "--sessions" && "$mode" != "--summary" ]]; then
+if [[ "$mode" != "--sessions" && "$mode" != "--summary" && "$mode" != "--activity" ]]; then
   n="$mode"
   [[ "$n" =~ ^[0-9]+$ ]] || n=24000
   sqlite3 -separator ' ' "$db" \
@@ -18,6 +19,18 @@ fi
 
 columns="$(sqlite3 "$db" "SELECT name FROM pragma_table_info('samples');" 2>/dev/null || true)"
 grep -qx power_state <<<"$columns" || exit 0
+
+if [[ "$mode" == "--activity" ]]; then
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  now="${BATTERY_HISTORY_NOW:-$(date +%s)}"
+  [[ "$now" =~ ^[0-9]+$ ]] || now="$(date +%s)"
+  {
+    printf 'epoch\tpower_state\tac_online\n'
+    sqlite3 -separator $'\t' "$db" \
+      "SELECT epoch, COALESCE(power_state, ''), COALESCE(ac_online, '') FROM samples ORDER BY epoch;"
+  } | node "$repo_root/BatteryHistory.js" --activity "$now"
+  exit 0
+fi
 
 days="${2:-7}"
 [[ "$days" =~ ^[0-9]+$ ]] || days=7

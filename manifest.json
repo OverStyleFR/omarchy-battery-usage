@@ -25,7 +25,8 @@
       "performanceSampleIntervalSec": 1,
       "graphMinutes": 10,
       "profileRefreshSec": 30,
-      "panelRefreshSec": 5
+      "panelRefreshSec": 5,
+      "reducedMotion": false
     },
     "schema": [
       {
@@ -97,6 +98,13 @@
         "max": 60,
         "step": 1,
         "defaultValue": 5
+      },
+      {
+        "key": "reducedMotion",
+        "type": "boolean",
+        "label": "Reduced motion",
+        "description": "Show a static charging status instead of animated rotating phrases.",
+        "defaultValue": false
       }
     ]
   }

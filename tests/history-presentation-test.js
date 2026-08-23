@@ -121,6 +121,21 @@ assert.deepEqual(
   "five minutes of discharging keeps the unplug start"
 );
 
+const fiveMinuteCharge = history.mergeSessionInterruptions(
+  [
+    { state: "discharging", startEpoch: 1000, endEpoch: 2000, complete: true },
+    { state: "charging", startEpoch: 2000, endEpoch: 2300, complete: false },
+  ],
+  2300,
+  "charging"
+);
+assert.equal(fiveMinuteCharge.length, 2, "five minutes of charging keeps both sessions");
+assert.deepEqual(
+  history.sessionRow(fiveMinuteCharge, "charging", 2300),
+  { kind: "charging-for", seconds: 300, label: "Charging for", value: "5m" },
+  "five minutes of charging keeps the plug-in start"
+);
+
 const briefCharge = history.mergeSessionInterruptions(
   [
     { state: "discharging", startEpoch: 1000, endEpoch: 2000, complete: true },
@@ -148,7 +163,7 @@ assert.equal(briefCharge[0].startEpoch, 1000);
   assert.equal(idle[0].complete, true);
   assert.deepEqual(
     history.sessionRow(idle, energyFlow, 2120),
-    { kind: "last-charge", seconds: 1120, label: "Last charge", value: "19m" },
+    { kind: "last-charge", seconds: 1000, label: "Last charge", value: "17m" },
     energyFlow + " shows last charge after the charging session ends"
   );
 });
@@ -214,8 +229,18 @@ assert.equal(twoMinuteUnplug[0].complete, false);
 assert.equal(twoMinuteUnplug[0].startEpoch, 2000);
 assert.deepEqual(
   history.sessionRow(twoMinuteUnplug, "discharging", 2120),
-  { kind: "discharging-for", seconds: 120, label: "Discharging for", value: "0h 2m" },
+  { kind: "discharging-for", seconds: 120, label: "Discharging for", value: "2m" },
   "unplug while charging shows Discharging for immediately"
+);
+assert.deepEqual(
+  history.sessionSummaryFromSessions(twoMinuteUnplug),
+  {
+    completed_discharge_sessions: 0,
+    average_discharge_seconds: 0,
+    completed_charge_sessions: 0,
+    average_charge_seconds: 0
+  },
+  "an open session interruption is not a completed session"
 );
 
 const replugBeforeThirdGroup = history.mergeSessionInterruptions(
@@ -232,7 +257,7 @@ assert.equal(replugBeforeThirdGroup[0].startEpoch, 1000);
 assert.equal(replugBeforeThirdGroup[0].complete, false);
 assert.deepEqual(
   history.sessionRow(replugBeforeThirdGroup, "charging", 2120),
-  { kind: "charging-for", seconds: 1120, label: "Charging for", value: "0h 18m" },
+  { kind: "charging-for", seconds: 1120, label: "Charging for", value: "19m" },
   "startup during a session interruption still resumes the original charging session"
 );
 
@@ -245,12 +270,12 @@ assert.equal(endedOnFull.length, 1);
 assert.equal(endedOnFull[0].complete, true);
 assert.deepEqual(
   history.sessionRow(endedOnFull, "fully-charged", 2000),
-  { kind: "last-charge", seconds: 1000, label: "Last charge", value: "0h 16m" },
+  { kind: "last-charge", seconds: 1000, label: "Last charge", value: "17m" },
   "fully charged completes the charging session for the idle line"
 );
 assert.equal(
   history.presentationState(true, "", endedOnFull, "fully-charged", 2000).status,
-  "Last charge 0h 16m",
+  "Last charge 17m",
   "the history status line shows last completed duration, not the raw energy-flow state"
 );
 
