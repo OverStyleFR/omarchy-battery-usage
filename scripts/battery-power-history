@@ -24,11 +24,18 @@ if [[ "$mode" == "--activity" ]]; then
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   now="${BATTERY_HISTORY_NOW:-$(date +%s)}"
   [[ "$now" =~ ^[0-9]+$ ]] || now="$(date +%s)"
+  uptime_seconds=0
+  if [[ -r /proc/uptime ]]; then
+    read -r uptime_raw _ < /proc/uptime
+    uptime_seconds="${uptime_raw%.*}"
+    [[ "$uptime_seconds" =~ ^[0-9]+$ ]] || uptime_seconds=0
+  fi
+  recharge_margin="${BATTERY_RECHARGE_MARGIN_PERCENT:-1.0}"
   {
-    printf 'epoch\tpower_state\tac_online\n'
+    printf 'epoch\tpower_state\tac_online\tbattery_percent\n'
     sqlite3 -separator $'\t' "$db" \
-      "SELECT epoch, COALESCE(power_state, ''), COALESCE(ac_online, '') FROM samples ORDER BY epoch;"
-  } | node "$repo_root/BatteryHistory.js" --activity "$now"
+      "SELECT epoch, COALESCE(power_state, ''), COALESCE(ac_online, ''), COALESCE(battery_percent, '') FROM samples ORDER BY epoch;"
+  } | node "$repo_root/BatteryHistory.js" --activity "$now" "$uptime_seconds" "$recharge_margin"
   exit 0
 fi
 
