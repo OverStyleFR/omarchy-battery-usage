@@ -19,6 +19,11 @@
           <span class="status-dot"></span>
           <span id="connectionText">CONNECTING</span>
         </div>
+        <div id="viewToggle" class="view-toggle" role="group" aria-label="Select energy view">
+          <button class="view-button is-active" data-view="auto" type="button">Auto</button>
+          <button class="view-button" data-view="discharge" type="button">Discharge</button>
+          <button class="view-button" data-view="charge" type="button">Charge</button>
+        </div>
         <button id="refreshButton" class="button button--quiet" type="button">Refresh</button>
         <a id="exportCsv" class="button button--outline" href="/api/export?minutes=360&amp;format=csv">CSV</a>
         <a id="exportJson" class="button button--outline" href="/api/export?minutes=360&amp;format=json">JSON</a>
@@ -33,22 +38,22 @@
           <div id="currentState" class="metric-note">Waiting for a sample</div>
         </article>
         <article class="metric-card">
-          <div class="metric-label">AVERAGE</div>
+          <div id="averageLabel" class="metric-label">AVERAGE</div>
           <div id="averageWatts" class="metric-value">--.- W</div>
           <div id="rangeCaption" class="metric-note">Selected range</div>
         </article>
         <article class="metric-card">
-          <div class="metric-label">PEAK</div>
+          <div id="peakLabel" class="metric-label">PEAK</div>
           <div id="peakWatts" class="metric-value">--.- W</div>
           <div id="minimumWatts" class="metric-note">Min --.- W</div>
         </article>
         <article class="metric-card">
-          <div class="metric-label">ENERGY</div>
+          <div id="energyLabel" class="metric-label">ENERGY</div>
           <div id="energyWh" class="metric-value">--.-- Wh</div>
           <div id="coverageCaption" class="metric-note">No coverage yet</div>
         </article>
         <article class="metric-card">
-          <div class="metric-label">EST. RUNTIME</div>
+          <div id="runtimeLabel" class="metric-label">EST. RUNTIME</div>
           <div id="runtime" class="metric-value">--</div>
           <div id="profileCaption" class="metric-note">Profile --</div>
         </article>

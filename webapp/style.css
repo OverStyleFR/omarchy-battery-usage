@@ -270,6 +270,36 @@ a:focus-visible {
   background: color-mix(in srgb, var(--accent) 13%, var(--surface));
 }
 
+.view-toggle {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  background: var(--surface-strong, #151828);
+  border: 1px solid var(--muted, #2d3450);
+  border-radius: 8px;
+}
+
+.view-button {
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg, #ddf7ff);
+  font: 500 12px/1 var(--font, system-ui, sans-serif);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.view-button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.view-button.is-active {
+  background: var(--fg, #ddf7ff);
+  color: var(--bg, #0b0c16);
+  border-color: var(--fg, #ddf7ff);
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.8fr);
