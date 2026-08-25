@@ -1,8 +1,10 @@
 const state = {
   minutes: 360,
+  viewMode: "auto",
   summary: null,
   history: [],
   daily: [],
+  chargeDaily: [],
   historyHoverX: null,
   dailyHoverX: null,
   historyGeometry: null,
@@ -137,29 +139,49 @@ function updateExportLinks() {
   $("exportJson").href = `/api/export?minutes=${minutes}&format=json`;
 }
 
+function effectiveMode(summary) {
+  if (state.viewMode !== "auto") return state.viewMode;
+  const battery = (summary && summary.battery) || {};
+  return battery.state === "charging" ? "charge" : "discharge";
+}
+
 function renderSummary(summary) {
   const battery = summary.battery || {};
   const percentage = Number.parseFloat(String(battery.percentage || ""));
   const profile = summary.activeProfile || "--";
-  const isCharging = battery.state === "charging" && summary.currentChargeWatts > 0.05;
+  const mode = effectiveMode(summary);
+  const isCharge = mode === "charge";
+  const liveState = battery.state === "charging" && summary.currentChargeWatts > 0.05;
 
-  setText("currentLabel", isCharging ? "BATTERY CHARGE" : "CURRENT DRAW");
-  $("currentWatts").classList.toggle("metric-value--charge", isCharging);
-  setText("currentWatts", isCharging ? `+${formatWatts(summary.currentChargeWatts)}` : formatWatts(summary.currentWatts));
-  const currentDirection = isCharging
+  const stats = isCharge ? (summary.chargeStats || {}) : summary;
+  const currentValue = isCharge ? summary.currentChargeWatts : summary.currentWatts;
+
+  setText("currentLabel", isCharge ? "CURRENT CHARGE" : "CURRENT DRAW");
+  $("currentWatts").classList.toggle("metric-value--charge", isCharge);
+  setText("currentWatts", isCharge ? `+${formatWatts(currentValue)}` : formatWatts(currentValue));
+  const currentDirection = isCharge
     ? `charging ${formatWatts(summary.currentChargeWatts)}`
     : `sample ${formatDateTime(summary.sampleEnd)}`;
   setText("currentState", `${battery.state || "Unknown state"} / ${currentDirection}`);
-  setText("averageWatts", formatWatts(summary.averageWatts));
+
+  setText("averageLabel", isCharge ? "AVERAGE CHARGE" : "AVERAGE");
+  setText("averageWatts", formatWatts(stats.averageWatts));
   setText("rangeCaption", rangeLabel());
-  setText("peakWatts", formatWatts(summary.peakWatts));
-  setText("minimumWatts", `Min ${formatWatts(summary.minimumWatts)}`);
-  setText("energyWh", formatWh(summary.energyWh));
-  setText("coverageCaption", `${formatCoverage(summary.coverageSeconds)} measured`);
-  setText("runtime", summary.runtime || "--");
+
+  setText("peakLabel", isCharge ? "PEAK CHARGE" : "PEAK");
+  setText("peakWatts", formatWatts(stats.peakWatts));
+  setText("minimumWatts", `Min ${formatWatts(stats.minimumWatts)}`);
+
+  setText("energyLabel", isCharge ? "CHARGE ENERGY" : "ENERGY");
+  setText("energyWh", formatWh(stats.energyWh));
+  setText("coverageCaption", `${formatCoverage(stats.coverageSeconds)} measured`);
+
+  setText("runtimeLabel", isCharge ? "TIME TO FULL" : "EST. RUNTIME");
+  setText("runtime", isCharge ? (battery.time || "--") : (summary.runtime || "--"));
+
   setText("profileCaption", `Profile ${profile}`);
-  setText("sampleCount", String(summary.count ?? "--"));
-  setText("measuredCoverage", formatCoverage(summary.coverageSeconds));
+  setText("sampleCount", String(stats.count ?? "--"));
+  setText("measuredCoverage", formatCoverage(stats.coverageSeconds));
   setText("historyRetained", `${Number(summary.retainedCount || 0).toLocaleString()} / ${formatCoverage(summary.retainedSeconds)}`);
   setText("lastSample", formatDateTime(summary.sampleEnd, true));
 
@@ -183,8 +205,9 @@ function renderHistoryMeta(summary, history) {
   setText("historyEnd", formatDateTime(summary?.sampleEnd, true));
 }
 
-function renderDailyList(days) {
+function renderDailyList() {
   const list = $("dailyList");
+  const days = state.viewMode === "charge" ? state.chargeDaily : state.daily;
   const recent = days.slice(-7).reverse();
   list.innerHTML = recent.length
     ? recent.map(([day, value]) => `<div><span>${day}</span><strong>${formatWh(value)}</strong></div>`).join("")
@@ -430,7 +453,7 @@ function nearestPoint(points, epoch) {
 function drawDaily() {
   const canvas = $("dailyChart");
   const { ctx, width, height } = prepareCanvas(canvas);
-  const rows = state.daily.slice(-60);
+  const rows = (state.viewMode === "charge" ? state.chargeDaily : state.daily).slice(-60);
   const padding = { left: 52, right: 18, top: 18, bottom: 34 };
   const plotWidth = Math.max(1, width - padding.left - padding.right);
   const plotHeight = Math.max(1, height - padding.top - padding.bottom);
@@ -528,12 +551,14 @@ async function loadDashboard() {
       Number(epoch), Number(discharge), Number(charge),
     ]);
     state.daily = (daily.days || []).map(([day, value]) => [String(day), Number(value)]);
+    state.chargeDaily = (daily.chargeDays || []).map(([day, value]) => [String(day), Number(value)]);
     renderSummary(summary);
     renderHistoryMeta(summary, state.history);
-    renderDailyList(state.daily);
+    renderDailyList();
     updateExportLinks();
     drawHistory();
     drawDaily();
+    updateViewButtons();
     setConnection("live", "LIVE");
     setText("lastUpdated", `Updated ${formatDateTime(summary.serverTime, true)}`);
   } catch (error) {
@@ -544,6 +569,12 @@ async function loadDashboard() {
   }
 }
 
+function updateViewButtons() {
+  document.querySelectorAll(".view-button").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.view === state.viewMode);
+  });
+}
+
 function bindRangeButtons() {
   document.querySelectorAll(".range-button").forEach((button) => {
     button.addEventListener("click", () => {
@@ -552,6 +583,18 @@ function bindRangeButtons() {
       document.querySelectorAll(".range-button").forEach((item) => item.classList.toggle("is-active", item === button));
       setText("rangeDescription", rangeLabel());
       loadDashboard();
+    });
+  });
+}
+
+function bindViewButtons() {
+  document.querySelectorAll(".view-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.viewMode = button.dataset.view;
+      if (state.summary) renderSummary(state.summary);
+      renderDailyList();
+      drawDaily();
+      updateViewButtons();
     });
   });
 }
@@ -582,6 +625,7 @@ function bindCanvasInteractions() {
 
 $("refreshButton").addEventListener("click", loadDashboard);
 bindRangeButtons();
+bindViewButtons();
 bindCanvasInteractions();
 window.addEventListener("resize", () => {
   drawHistory();

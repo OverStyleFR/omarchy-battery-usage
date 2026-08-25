@@ -29,6 +29,7 @@ MIN_DISCHARGE_WATTS = 1.0
 MIN_CHARGE_WATTS = 0.05
 
 _daily_cache: tuple[float, dict[str, float]] | None = None
+_daily_charge_cache: tuple[float, dict[str, float]] | None = None
 
 
 def db_connect() -> sqlite3.Connection:
@@ -80,23 +81,24 @@ def retained_stats() -> dict[str, float | int]:
     return {"count": int(row[0]) if row else 0, "coverageSeconds": int(row[1]) if row else 0}
 
 
-def load_daily() -> dict[str, float]:
-    """Aggregate daily discharge energy from samples, cached briefly."""
-    global _daily_cache
+def load_daily(column: str = "discharge_watts") -> dict[str, float]:
+    """Aggregate daily energy from samples, cached briefly."""
+    global _daily_cache, _daily_charge_cache
 
     now = time.time()
-    if _daily_cache and now - _daily_cache[0] < 60:
-        return _daily_cache[1]
+    cache = _daily_charge_cache if column == "charge_watts" else _daily_cache
+    if cache and now - cache[0] < 60:
+        return cache[1]
 
     rows = query_all(
-        """
+        f"""
         WITH t AS (
-          SELECT epoch, discharge_watts,
+          SELECT epoch, {column} AS watts,
                  LAG(epoch) OVER (ORDER BY epoch) AS prev,
                  date(epoch, 'unixepoch', 'localtime') AS day
           FROM samples
         )
-        SELECT day, SUM(discharge_watts * (epoch - prev) / 3600.0)
+        SELECT day, SUM(watts * (epoch - prev) / 3600.0)
         FROM t
         WHERE day IS NOT NULL AND prev IS NOT NULL AND epoch - prev <= ?
         GROUP BY day ORDER BY day
@@ -104,7 +106,10 @@ def load_daily() -> dict[str, float]:
         (MAX_GAP_SECONDS,),
     )
     days = {row[0]: float(row[1]) for row in rows}
-    _daily_cache = (now, days)
+    if column == "charge_watts":
+        _daily_charge_cache = (now, days)
+    else:
+        _daily_cache = (now, days)
     return days
 
 
@@ -145,6 +150,10 @@ def downsample(points: list[tuple[int, float, float]], limit: int = MAX_CHART_PO
 
 def discharge_points(points: list[tuple[int, float, float]]) -> list[tuple[int, float]]:
     return [(epoch, discharge_watts) for epoch, discharge_watts, _ in points if discharge_watts > MIN_DISCHARGE_WATTS]
+
+
+def charge_points(points: list[tuple[int, float, float]]) -> list[tuple[int, float]]:
+    return [(epoch, charge_watts) for epoch, _, charge_watts in points if charge_watts > MIN_CHARGE_WATTS]
 
 
 def calculate_stats(points: list[tuple[int, float]]) -> dict[str, float | int]:
@@ -234,6 +243,7 @@ def build_summary(minutes: float | None) -> dict[str, object]:
     cutoff = int(time.time() - minutes * 60) if minutes is not None else None
     points = load_history(min_epoch=cutoff, max_rows=MAX_HISTORY_ROWS)
     stats = calculate_stats(discharge_points(points))
+    charge_stats = calculate_stats(charge_points(points))
     retained = retained_stats()
     battery = read_key_values(["omarchy-battery-status", "--shell"])
     profile_values = read_key_values(["omarchy-powerprofiles-list", "--active-state"])
@@ -267,6 +277,7 @@ def build_summary(minutes: float | None) -> dict[str, object]:
         "battery": battery,
         "activeProfile": active_profile,
         "serverTime": int(time.time()),
+        "chargeStats": charge_stats,
     }
 
 
@@ -308,14 +319,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/api/daily":
-                days = load_daily()
+                days = load_daily("discharge_watts")
+                charge_days = load_daily("charge_watts")
                 requested_days = query.get("days", [None])[0]
                 if requested_days:
                     try:
                         days = dict(sorted(days.items())[-max(1, int(requested_days)):])
+                        charge_days = dict(sorted(charge_days.items())[-max(1, int(requested_days)):])
                     except ValueError:
                         pass
-                self.send_json({"days": [[date, value] for date, value in sorted(days.items())]})
+                self.send_json({
+                    "days": [[date, value] for date, value in sorted(days.items())],
+                    "chargeDays": [[date, value] for date, value in sorted(charge_days.items())],
+                })
                 return
 
             if parsed.path == "/api/theme":
