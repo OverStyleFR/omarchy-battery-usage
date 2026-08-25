@@ -19,6 +19,7 @@ var chargingStatusMessages = [
 ]
 
 var MAX_CONTINUOUS_SAMPLE_GAP_SECONDS = 60
+var DEFAULT_RECHARGE_MARGIN_PERCENT = 1.0
 
 function continuousSampleSeconds(startEpoch, endEpoch) {
   var seconds = Number(endEpoch) - Number(startEpoch)
@@ -56,7 +57,21 @@ function activelyCharging(powerState, onBattery) {
   return String(powerState || "") === "charging" && externalPowerConnected(powerState, onBattery)
 }
 
-function batteryActivitySummary(observations, now) {
+function rechargeAcrossGap(previousItem, currentItem, marginPercent) {
+  if (!previousItem || currentItem.acOnline !== 0) return false
+  if (previousItem.acOnline !== 0) return false
+  var gap = Number(currentItem.epoch) - Number(previousItem.epoch)
+  if (!isFinite(gap) || gap <= MAX_CONTINUOUS_SAMPLE_GAP_SECONDS) return false
+  var previousPercent = Number(previousItem.batteryPercent)
+  var currentPercent = Number(currentItem.batteryPercent)
+  if (!isFinite(previousPercent) || !isFinite(currentPercent)) return false
+  return currentPercent - previousPercent > Number(marginPercent)
+}
+
+function batteryActivitySummary(observations, now, uptimeSeconds, rechargeMargin) {
+  if (rechargeMargin == null || !isFinite(Number(rechargeMargin))) {
+    rechargeMargin = DEFAULT_RECHARGE_MARGIN_PERCENT
+  }
   var result = {
     lastTimeOnBattery: null,
     lastChargingDuration: null,
@@ -71,13 +86,19 @@ function batteryActivitySummary(observations, now) {
   var lastUnpluggedObservation = null
   var chargingStart = null
   var lastChargingObservation = null
+  var previousItem = null
 
   for (var i = 0; i < list.length; i++) {
     var item = list[i]
     var epoch = Number(item.epoch)
     if (!isFinite(epoch)) continue
 
-    if (item.acOnline === 0) {
+    if (item.acOnline === 0 && rechargeAcrossGap(previousItem, item, rechargeMargin)) {
+      if (unpluggedStart != null && unpluggedSeconds > 0) result.lastTimeOnBattery = unpluggedSeconds
+      unpluggedStart = epoch
+      unpluggedSeconds = 0
+      lastUnpluggedObservation = epoch
+    } else if (item.acOnline === 0) {
       if (unpluggedStart == null) {
         unpluggedStart = epoch
         unpluggedSeconds = 0
@@ -109,6 +130,8 @@ function batteryActivitySummary(observations, now) {
       chargingStart = null
       lastChargingObservation = null
     }
+
+    previousItem = item
   }
 
   if (list.length > 0 && list[list.length - 1].acOnline === 0 && unpluggedStart != null) {
@@ -168,10 +191,12 @@ function parseObservations(raw) {
     for (var field = 0; field < fields.length; field++) record[fields[field]] = parts[field]
     var epoch = Number(record.epoch)
     if (!isFinite(epoch)) continue
+    var batteryPercent = record.battery_percent === "" ? NaN : Number(record.battery_percent)
     list.push({
       epoch: epoch,
       powerState: record.power_state,
-      acOnline: record.ac_online === "0" ? 0 : record.ac_online === "1" ? 1 : null
+      acOnline: record.ac_online === "0" ? 0 : record.ac_online === "1" ? 1 : null,
+      batteryPercent: isFinite(batteryPercent) ? batteryPercent : null
     })
   }
   return list
@@ -468,6 +493,7 @@ if (typeof module !== "undefined") {
     activelyCharging: activelyCharging,
     batteryActivityPresentation: batteryActivityPresentation,
     batteryActivitySummary: batteryActivitySummary,
+    DEFAULT_RECHARGE_MARGIN_PERCENT: DEFAULT_RECHARGE_MARGIN_PERCENT,
     chargingStatusMessages: chargingStatusMessages,
     chargingStatusRotationInterval: chargingStatusRotationInterval,
     continuousSampleSeconds: continuousSampleSeconds,
@@ -492,7 +518,14 @@ if (typeof process !== "undefined" && typeof module !== "undefined" && require.m
   process.stdin.setEncoding("utf8")
   process.stdin.on("data", function(chunk) { input += chunk })
   process.stdin.on("end", function() {
-    var activity = batteryActivitySummary(parseObservations(input), Number(process.argv[3]))
+    var uptimeArg = Number(process.argv[4])
+    var marginArg = Number(process.argv[5])
+    var activity = batteryActivitySummary(
+      parseObservations(input),
+      Number(process.argv[3]),
+      isFinite(uptimeArg) && uptimeArg > 0 ? uptimeArg : null,
+      isFinite(marginArg) && marginArg > 0 ? marginArg : DEFAULT_RECHARGE_MARGIN_PERCENT
+    )
     function output(name, value) {
       process.stdout.write(name + "\t" + (value == null ? "" : value) + "\n")
     }

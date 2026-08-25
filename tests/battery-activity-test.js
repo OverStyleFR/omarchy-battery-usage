@@ -1,8 +1,8 @@
 const assert = require("node:assert/strict");
 const history = require("../BatteryHistory.js");
 
-function observation(epoch, powerState, acOnline) {
-  return { epoch, powerState, acOnline };
+function observation(epoch, powerState, acOnline, batteryPercent) {
+  return { epoch, powerState, acOnline, batteryPercent };
 }
 
 assert.deepEqual(
@@ -162,10 +162,13 @@ assert.deepEqual(
 
 assert.deepEqual(
   history.parseObservations(
-    "epoch\tpower_state\tac_online\n100\tdischarging\t0\n200\tidle\t1\ninvalid\tcharging\t1\n"
+    "epoch\tpower_state\tac_online\tbattery_percent\n100\tdischarging\t0\t\n200\tidle\t1\t\ninvalid\tcharging\t1\t\n"
   ),
-  [observation(100, "discharging", 0), observation(200, "idle", 1)],
-  "persisted observation rows preserve connection state and reject invalid timestamps"
+  [
+    { epoch: 100, powerState: "discharging", acOnline: 0, batteryPercent: null },
+    { epoch: 200, powerState: "idle", acOnline: 1, batteryPercent: null },
+  ],
+  "persisted observation rows preserve connection state, battery level, and reject invalid timestamps"
 );
 
 assert.deepEqual(
@@ -237,6 +240,39 @@ assert.deepEqual(
   history.batteryActivityPresentation({ currentChargingDuration: 0 }).currentChargingDuration,
   { seconds: 0, value: "less than 1 minute", ratio: 0 },
   "a newly observed live charge is immediately available instead of rendering as missing"
+);
+
+assert.deepEqual(
+  history.batteryActivitySummary(
+    [
+      observation(100, "discharging", 0, 80),
+      observation(160, "discharging", 0, 79),
+      observation(5000, "discharging", 0, 90),
+      observation(5060, "discharging", 0, 89),
+    ],
+    5120
+  ),
+  {
+    lastTimeOnBattery: 60,
+    lastChargingDuration: null,
+    currentTimeOnBattery: 120,
+    lastChargeAt: null,
+    currentChargingStartedAt: null,
+    currentChargingDuration: null,
+  },
+  "a battery percentage rise across an unplugged gap closes the previous interval"
+);
+
+assert.equal(
+  history.batteryActivitySummary(
+    [
+      observation(100, "discharging", 0, 80),
+      observation(5000, "discharging", 0, 81),
+    ],
+    5060
+  ).currentTimeOnBattery,
+  60,
+  "a small percentage rise stays within the configured margin and keeps the interval open"
 );
 
 console.log("PASS: battery activity calculation contract");

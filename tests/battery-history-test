@@ -185,4 +185,26 @@ range_sessions="$(HOME="$range_home" BATTERY_HISTORY_NOW=1000000 "$history_comma
 assert_equal $'state\tstart_epoch\tend_epoch\tstart_percent\tend_percent\tduration_seconds\tcomplete\ndischarging\t999900\t999900\t60.0\t60.0\t0\t0' "$range_sessions" \
   'the default seven-day range excludes older sessions'
 
+recharge_home="$test_root/recharge-home"
+mkdir -p "$recharge_home/.local/state/tomv.battery-usage"
+recharge_db="$recharge_home/.local/state/tomv.battery-usage/power.db"
+sqlite3 "$recharge_db" <<'SQL'
+CREATE TABLE samples (
+  epoch INTEGER PRIMARY KEY,
+  discharge_watts REAL NOT NULL,
+  charge_watts REAL NOT NULL,
+  battery_percent REAL,
+  power_state TEXT,
+  ac_online INTEGER
+);
+INSERT INTO samples VALUES
+  (100, 8.0, 0.0, 35.0, 'discharging', 0),
+  (160, 8.0, 0.0, 34.0, 'discharging', 0),
+  (5000, 0.0, 0.0, 89.0, 'discharging', 0),
+  (5060, 0.0, 0.0, 88.0, 'discharging', 0);
+SQL
+recharge_activity="$(HOME="$recharge_home" BATTERY_HISTORY_NOW=5120 "$history_command" --activity 7)"
+assert_equal $'last_time_on_battery_seconds\t60\nlast_charging_duration_seconds\t\ncurrent_time_on_battery_seconds\t120\nlast_charge_at\t\ncurrent_charging_started_at\t\ncurrent_charging_duration_seconds\t' "$recharge_activity" \
+  'an unobserved recharge while unplugged closes the previous unplugged interval'
+
 printf 'PASS: battery history command contract\n'

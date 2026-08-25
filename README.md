@@ -128,7 +128,11 @@ transition.
 
 `Time on battery now` and `Last time on battery` measure the awake portions of
 an AC-disconnected interval. Gaps between samples longer than one minute are
-excluded so time spent shut down or suspended is not counted.
+excluded so time spent shut down or suspended is not counted. If the battery
+percentage rises across such a gap while the laptop is still reported as
+unplugged, the interval is closed: this catches a recharge that happened while
+the machine was off. The detection margin is configurable via
+`BATTERY_RECHARGE_MARGIN_PERCENT` (default `1.0` percent).
 
 The current charge or discharge session appears in the panel but is excluded
 from completed-session averages. Existing databases are migrated additively on
