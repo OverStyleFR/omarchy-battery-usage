@@ -275,4 +275,22 @@ assert.equal(
   "a small percentage rise stays within the configured margin and keeps the interval open"
 );
 
+assert.deepEqual(
+  history.batteryActivitySummary(
+    [observation(100, "discharging", 0, 50)],
+    150,
+    30,
+    history.DEFAULT_RECHARGE_MARGIN_PERCENT
+  ),
+  {
+    lastTimeOnBattery: null,
+    lastChargingDuration: null,
+    currentTimeOnBattery: 30,
+    lastChargeAt: null,
+    currentChargingStartedAt: null,
+    currentChargingDuration: null,
+  },
+  "current time on battery is capped by system uptime"
+);
+
 console.log("PASS: battery activity calculation contract");
