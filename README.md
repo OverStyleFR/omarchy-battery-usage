@@ -134,6 +134,9 @@ unplugged, the interval is closed: this catches a recharge that happened while
 the machine was off. The detection margin is configurable via
 `BATTERY_RECHARGE_MARGIN_PERCENT` (default `1.0` percent).
 
+`Time on battery now` is also capped by the system uptime, so a fresh boot can
+never report more battery time than the machine has been running.
+
 The current charge or discharge session appears in the panel but is excluded
 from completed-session averages. Existing databases are migrated additively on
 the next sample, preserving their watts history; legacy rows simply have no

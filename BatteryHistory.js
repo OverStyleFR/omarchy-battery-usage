@@ -138,6 +138,8 @@ function batteryActivitySummary(observations, now, uptimeSeconds, rechargeMargin
     var currentEpoch = Number(now)
     if (isFinite(currentEpoch) && lastUnpluggedObservation != null && currentEpoch >= lastUnpluggedObservation) {
       result.currentTimeOnBattery = unpluggedSeconds + continuousSampleSeconds(lastUnpluggedObservation, currentEpoch)
+      var uptime = Number(uptimeSeconds)
+      if (isFinite(uptime) && result.currentTimeOnBattery > uptime) result.currentTimeOnBattery = uptime
     }
   }
   if (list.length > 0 && list[list.length - 1].acOnline === 1 &&
