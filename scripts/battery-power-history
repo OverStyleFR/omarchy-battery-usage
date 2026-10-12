@@ -31,11 +31,47 @@ if [[ "$mode" == "--activity" ]]; then
     [[ "$uptime_seconds" =~ ^[0-9]+$ ]] || uptime_seconds=0
   fi
   recharge_margin="${BATTERY_RECHARGE_MARGIN_PERCENT:-1.0}"
-  {
-    printf 'epoch\tpower_state\tac_online\tbattery_percent\n'
-    sqlite3 -separator $'\t' "$db" \
-      "SELECT epoch, COALESCE(power_state, ''), COALESCE(ac_online, ''), COALESCE(battery_percent, '') FROM samples ORDER BY epoch;"
-  } | node "$repo_root/BatteryHistory.js" --activity "$now" "$uptime_seconds" "$recharge_margin"
+  activity_header=$'epoch\tpower_state\tac_online\tbattery_percent'
+  activity_select="SELECT epoch, COALESCE(power_state, ''), COALESCE(ac_online, ''), COALESCE(battery_percent, '') FROM samples"
+
+  activity_full() {
+    {
+      printf '%s\n' "$activity_header"
+      sqlite3 -separator $'\t' "$db" "$activity_select ORDER BY epoch;"
+    } | node "$repo_root/BatteryHistory.js" --activity "$now" "$uptime_seconds" "$recharge_margin"
+  }
+
+  state_file="$(dirname "$db")/activity-state.json"
+  db_inode="$(stat -c %i "$db")"
+  exec 9>"$state_file.lock"
+  if ! flock -w 5 9; then
+    activity_full
+    exit 0
+  fi
+
+  read -r cursor_epoch cursor_count < <(node "$repo_root/BatteryHistory.js" --activity-cursor "$state_file" "$db_inode")
+  reset=0
+  if ((cursor_epoch > 0)); then
+    stored_count="$(sqlite3 "$db" "SELECT count(*) FROM samples WHERE epoch <= $cursor_epoch;")"
+    [[ "$stored_count" == "$cursor_count" ]] || reset=1
+  fi
+  if ((cursor_epoch == 0)); then reset=1; fi
+  if ((reset == 1)); then cursor_epoch=0; cursor_count=0; fi
+
+  rows="$(sqlite3 -separator $'\t' "$db" "$activity_select WHERE epoch > $cursor_epoch ORDER BY epoch;")"
+  if [[ -n "$rows" ]]; then
+    new_epoch="$(tail -n 1 <<<"$rows" | cut -f1)"
+    new_count="$(sqlite3 "$db" "SELECT count(*) FROM samples WHERE epoch <= $new_epoch;")"
+  else
+    new_epoch="$cursor_epoch"
+    new_count="$cursor_count"
+  fi
+
+  if summary="$(printf '%s\n%s\n' "$activity_header" "$rows" | node "$repo_root/BatteryHistory.js" --activity-update "$state_file" "$db_inode" "$now" "$uptime_seconds" "$recharge_margin" "$new_epoch" "$new_count" "$reset")"; then
+    printf '%s\n' "$summary"
+  else
+    activity_full
+  fi
   exit 0
 fi
 

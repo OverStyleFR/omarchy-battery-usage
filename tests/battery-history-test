@@ -208,3 +208,37 @@ assert_equal $'last_time_on_battery_seconds\t60\nlast_charging_duration_seconds\
   'an unobserved recharge while unplugged closes the previous unplugged interval'
 
 printf 'PASS: battery history command contract\n'
+
+incremental_home="$test_root/incremental-home"
+incremental_state_dir="$incremental_home/.local/state/tomv.battery-usage"
+mkdir -p "$incremental_state_dir"
+incremental_db="$incremental_state_dir/power.db"
+sqlite3 "$incremental_db" <<'SQL'
+CREATE TABLE samples (
+  epoch INTEGER PRIMARY KEY,
+  discharge_watts REAL NOT NULL,
+  charge_watts REAL NOT NULL,
+  battery_percent REAL,
+  power_state TEXT,
+  ac_online INTEGER
+);
+INSERT INTO samples VALUES
+  (100, 8.0, 0.0, 35.0, 'discharging', 0),
+  (160, 8.0, 0.0, 34.0, 'discharging', 0);
+SQL
+run_incremental() {
+  HOME="$incremental_home" BATTERY_HISTORY_NOW="$1" "$history_command" --activity 7
+}
+run_incremental 200 >/dev/null
+sqlite3 "$incremental_db" "INSERT INTO samples VALUES (220, 8.0, 0.0, 33.0, 'discharging', 0), (280, 8.0, 0.0, 32.0, 'discharging', 0);"
+incremental_after_growth="$(run_incremental 300)"
+rm -f "$incremental_state_dir/activity-state.json"
+full_recompute="$(run_incremental 300)"
+assert_equal "$full_recompute" "$incremental_after_growth" \
+  'incremental activity after new samples matches a full recomputation'
+
+printf 'not json' >"$incremental_state_dir/activity-state.json"
+assert_equal "$full_recompute" "$(run_incremental 300)" \
+  'a corrupt activity state is rebuilt from the database'
+
+printf 'PASS: incremental activity state\n'

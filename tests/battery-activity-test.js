@@ -294,3 +294,44 @@ assert.deepEqual(
 );
 
 console.log("PASS: battery activity calculation contract");
+
+function seededRandom(seed) {
+  var state = seed
+  return function() {
+    state = (state * 1103515245 + 12345) & 0x7fffffff
+    return state / 0x7fffffff
+  }
+}
+
+function randomObservations(random, count) {
+  var list = []
+  var epoch = 1000
+  for (var i = 0; i < count; i++) {
+    epoch += random() < 0.1 ? 120 + Math.floor(random() * 4000) : 1 + Math.floor(random() * 60)
+    var acOnline = random() < 0.15 ? null : random() < 0.5 ? 0 : 1
+    var powerState = acOnline === 1 && random() < 0.6 ? "charging" : random() < 0.5 ? "discharging" : "idle"
+    var batteryPercent = random() < 0.05 ? null : Math.floor(random() * 100)
+    list.push(observation(epoch, powerState, acOnline, batteryPercent))
+  }
+  return list
+}
+
+for (var seed = 1; seed <= 200; seed++) {
+  var random = seededRandom(seed)
+  var list = randomObservations(random, 300)
+  var cut1 = Math.floor(random() * list.length)
+  var cut2 = cut1 + Math.floor(random() * (list.length - cut1))
+  var now = list[list.length - 1].epoch + Math.floor(random() * 600)
+  var uptime = 100000
+  var expected = history.batteryActivitySummary(list, now, uptime, 1.0)
+  var state = history.newActivityState()
+  var chunks = [list.slice(0, cut1), list.slice(cut1, cut2), list.slice(cut2)]
+  for (var c = 0; c < chunks.length; c++) {
+    var roundTripped = JSON.parse(JSON.stringify(state))
+    state = roundTripped
+    for (var k = 0; k < chunks[c].length; k++) history.foldActivity(state, chunks[c][k], 1.0)
+  }
+  assert.deepEqual(history.finishActivity(state, now, uptime), expected, "seed " + seed)
+}
+
+console.log("PASS: incremental activity fold matches full recomputation")
