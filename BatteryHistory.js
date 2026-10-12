@@ -68,89 +68,102 @@ function rechargeAcrossGap(previousItem, currentItem, marginPercent) {
   return currentPercent - previousPercent > Number(marginPercent)
 }
 
-function batteryActivitySummary(observations, now, uptimeSeconds, rechargeMargin) {
-  if (rechargeMargin == null || !isFinite(Number(rechargeMargin))) {
-    rechargeMargin = DEFAULT_RECHARGE_MARGIN_PERCENT
-  }
-  var result = {
+function newActivityState() {
+  return {
+    prev: null,
+    unpluggedStart: null,
+    unpluggedSeconds: 0,
+    lastUnpluggedObservation: null,
+    chargingStart: null,
+    lastChargingObservation: null,
     lastTimeOnBattery: null,
     lastChargingDuration: null,
+    lastChargeAt: null
+  }
+}
+
+function foldActivity(state, item, rechargeMargin) {
+  var epoch = Number(item.epoch)
+  if (!isFinite(epoch)) return state
+
+  if (item.acOnline === 0 && rechargeAcrossGap(state.prev, item, rechargeMargin)) {
+    if (state.unpluggedStart != null && state.unpluggedSeconds > 0) state.lastTimeOnBattery = state.unpluggedSeconds
+    state.unpluggedStart = epoch
+    state.unpluggedSeconds = 0
+    state.lastUnpluggedObservation = epoch
+  } else if (item.acOnline === 0) {
+    if (state.unpluggedStart == null) {
+      state.unpluggedStart = epoch
+      state.unpluggedSeconds = 0
+    } else if (state.lastUnpluggedObservation != null) {
+      state.unpluggedSeconds += continuousSampleSeconds(state.lastUnpluggedObservation, epoch)
+    }
+    state.lastUnpluggedObservation = epoch
+  } else if (item.acOnline === 1 && state.unpluggedStart != null) {
+    var unpluggedDuration = state.unpluggedSeconds + continuousSampleSeconds(state.lastUnpluggedObservation, epoch)
+    if (isFinite(unpluggedDuration) && unpluggedDuration > 0) state.lastTimeOnBattery = unpluggedDuration
+    state.unpluggedStart = null
+    state.unpluggedSeconds = 0
+    state.lastUnpluggedObservation = null
+  } else if (item.acOnline !== 1 && state.unpluggedStart != null) {
+    // An unknown AC observation cannot prove the laptop stayed awake.
+    state.lastUnpluggedObservation = null
+  }
+
+  if (item.powerState === "charging") {
+    if (state.chargingStart == null) state.chargingStart = epoch
+    state.lastChargingObservation = epoch
+  } else if (state.chargingStart != null) {
+    var chargingEnd = epoch - state.lastChargingObservation <= 300 ? epoch : state.lastChargingObservation
+    var chargingDuration = chargingEnd - state.chargingStart
+    if (isFinite(chargingDuration) && chargingDuration > 0) {
+      state.lastChargingDuration = chargingDuration
+      state.lastChargeAt = chargingEnd
+    }
+    state.chargingStart = null
+    state.lastChargingObservation = null
+  }
+
+  state.prev = item
+  return state
+}
+
+function finishActivity(state, now, uptimeSeconds) {
+  var result = {
+    lastTimeOnBattery: state.lastTimeOnBattery,
+    lastChargingDuration: state.lastChargingDuration,
     currentTimeOnBattery: null,
-    lastChargeAt: null,
+    lastChargeAt: state.lastChargeAt,
     currentChargingStartedAt: null,
     currentChargingDuration: null
   }
-  var list = observations || []
-  var unpluggedStart = null
-  var unpluggedSeconds = 0
-  var lastUnpluggedObservation = null
-  var chargingStart = null
-  var lastChargingObservation = null
-  var previousItem = null
-
-  for (var i = 0; i < list.length; i++) {
-    var item = list[i]
-    var epoch = Number(item.epoch)
-    if (!isFinite(epoch)) continue
-
-    if (item.acOnline === 0 && rechargeAcrossGap(previousItem, item, rechargeMargin)) {
-      if (unpluggedStart != null && unpluggedSeconds > 0) result.lastTimeOnBattery = unpluggedSeconds
-      unpluggedStart = epoch
-      unpluggedSeconds = 0
-      lastUnpluggedObservation = epoch
-    } else if (item.acOnline === 0) {
-      if (unpluggedStart == null) {
-        unpluggedStart = epoch
-        unpluggedSeconds = 0
-      } else if (lastUnpluggedObservation != null) {
-        unpluggedSeconds += continuousSampleSeconds(lastUnpluggedObservation, epoch)
-      }
-      lastUnpluggedObservation = epoch
-    } else if (item.acOnline === 1 && unpluggedStart != null) {
-      var unpluggedDuration = unpluggedSeconds + continuousSampleSeconds(lastUnpluggedObservation, epoch)
-      if (isFinite(unpluggedDuration) && unpluggedDuration > 0) result.lastTimeOnBattery = unpluggedDuration
-      unpluggedStart = null
-      unpluggedSeconds = 0
-      lastUnpluggedObservation = null
-    } else if (item.acOnline !== 1 && unpluggedStart != null) {
-      // An unknown AC observation cannot prove the laptop stayed awake.
-      lastUnpluggedObservation = null
-    }
-
-    if (item.powerState === "charging") {
-      if (chargingStart == null) chargingStart = epoch
-      lastChargingObservation = epoch
-    } else if (chargingStart != null) {
-      var chargingEnd = epoch - lastChargingObservation <= 300 ? epoch : lastChargingObservation
-      var chargingDuration = chargingEnd - chargingStart
-      if (isFinite(chargingDuration) && chargingDuration > 0) {
-        result.lastChargingDuration = chargingDuration
-        result.lastChargeAt = chargingEnd
-      }
-      chargingStart = null
-      lastChargingObservation = null
-    }
-
-    previousItem = item
-  }
-
-  if (list.length > 0 && list[list.length - 1].acOnline === 0 && unpluggedStart != null) {
+  var last = state.prev
+  if (last && last.acOnline === 0 && state.unpluggedStart != null) {
     var currentEpoch = Number(now)
-    if (isFinite(currentEpoch) && lastUnpluggedObservation != null && currentEpoch >= lastUnpluggedObservation) {
-      result.currentTimeOnBattery = unpluggedSeconds + continuousSampleSeconds(lastUnpluggedObservation, currentEpoch)
+    if (isFinite(currentEpoch) && state.lastUnpluggedObservation != null && currentEpoch >= state.lastUnpluggedObservation) {
+      result.currentTimeOnBattery = state.unpluggedSeconds + continuousSampleSeconds(state.lastUnpluggedObservation, currentEpoch)
       var uptime = Number(uptimeSeconds)
       if (isFinite(uptime) && result.currentTimeOnBattery > uptime) result.currentTimeOnBattery = uptime
     }
   }
-  if (list.length > 0 && list[list.length - 1].acOnline === 1 &&
-      list[list.length - 1].powerState === "charging" && chargingStart != null) {
-    var currentChargingDuration = Number(now) - chargingStart
+  if (last && last.acOnline === 1 && last.powerState === "charging" && state.chargingStart != null) {
+    var currentChargingDuration = Number(now) - state.chargingStart
     if (isFinite(currentChargingDuration) && currentChargingDuration >= 0) {
-      result.currentChargingStartedAt = chargingStart
+      result.currentChargingStartedAt = state.chargingStart
       result.currentChargingDuration = currentChargingDuration
     }
   }
   return result
+}
+
+function batteryActivitySummary(observations, now, uptimeSeconds, rechargeMargin) {
+  if (rechargeMargin == null || !isFinite(Number(rechargeMargin))) {
+    rechargeMargin = DEFAULT_RECHARGE_MARGIN_PERCENT
+  }
+  var state = newActivityState()
+  var list = observations || []
+  for (var i = 0; i < list.length; i++) foldActivity(state, list[i], rechargeMargin)
+  return finishActivity(state, now, uptimeSeconds)
 }
 
 function batteryActivityPresentation(activity) {
@@ -495,6 +508,9 @@ if (typeof module !== "undefined") {
     activelyCharging: activelyCharging,
     batteryActivityPresentation: batteryActivityPresentation,
     batteryActivitySummary: batteryActivitySummary,
+    foldActivity: foldActivity,
+    finishActivity: finishActivity,
+    newActivityState: newActivityState,
     DEFAULT_RECHARGE_MARGIN_PERCENT: DEFAULT_RECHARGE_MARGIN_PERCENT,
     chargingStatusMessages: chargingStatusMessages,
     chargingStatusRotationInterval: chargingStatusRotationInterval,
@@ -515,19 +531,30 @@ if (typeof module !== "undefined") {
   }
 }
 
-if (typeof process !== "undefined" && typeof module !== "undefined" && require.main === module && process.argv[2] === "--activity") {
-  var input = ""
-  process.stdin.setEncoding("utf8")
-  process.stdin.on("data", function(chunk) { input += chunk })
-  process.stdin.on("end", function() {
-    var uptimeArg = Number(process.argv[4])
-    var marginArg = Number(process.argv[5])
-    var activity = batteryActivitySummary(
-      parseObservations(input),
-      Number(process.argv[3]),
-      isFinite(uptimeArg) && uptimeArg > 0 ? uptimeArg : null,
-      isFinite(marginArg) && marginArg > 0 ? marginArg : DEFAULT_RECHARGE_MARGIN_PERCENT
-    )
+var ACTIVITY_STATE_VERSION = 1
+
+if (typeof process !== "undefined" && typeof module !== "undefined" && require.main === module) {
+  var cliMode = process.argv[2]
+  var fs = require("fs")
+
+  function readActivityState(file, dbInode) {
+    try {
+      var data = JSON.parse(fs.readFileSync(file, "utf8"))
+    } catch (error) {
+      return null
+    }
+    if (!data || data.version !== ACTIVITY_STATE_VERSION || String(data.dbInode) !== String(dbInode)) return null
+    return data
+  }
+
+  function readStdin(callback) {
+    var input = ""
+    process.stdin.setEncoding("utf8")
+    process.stdin.on("data", function(chunk) { input += chunk })
+    process.stdin.on("end", function() { callback(input) })
+  }
+
+  function printSummary(activity) {
     function output(name, value) {
       process.stdout.write(name + "\t" + (value == null ? "" : value) + "\n")
     }
@@ -537,5 +564,52 @@ if (typeof process !== "undefined" && typeof module !== "undefined" && require.m
     output("last_charge_at", activity.lastChargeAt)
     output("current_charging_started_at", activity.currentChargingStartedAt)
     output("current_charging_duration_seconds", activity.currentChargingDuration)
-  })
+  }
+
+  if (cliMode === "--activity") {
+    readStdin(function(input) {
+      var uptimeArg = Number(process.argv[4])
+      var marginArg = Number(process.argv[5])
+      printSummary(batteryActivitySummary(
+        parseObservations(input),
+        Number(process.argv[3]),
+        isFinite(uptimeArg) && uptimeArg > 0 ? uptimeArg : null,
+        isFinite(marginArg) && marginArg > 0 ? marginArg : DEFAULT_RECHARGE_MARGIN_PERCENT
+      ))
+    })
+  }
+
+  if (cliMode === "--activity-cursor") {
+    var cursor = readActivityState(process.argv[3], process.argv[4])
+    process.stdout.write(cursor ? cursor.lastEpoch + "\t" + cursor.rowCount + "\n" : "0\t0\n")
+  }
+
+  if (cliMode === "--activity-update") {
+    var stateFile = process.argv[3]
+    var dbInode = process.argv[4]
+    var reset = process.argv[10] === "1"
+    var stored = reset ? null : readActivityState(stateFile, dbInode)
+    if (!reset && !stored) {
+      process.exit(2)
+    }
+    readStdin(function(input) {
+      var uptimeArg = Number(process.argv[6])
+      var marginArg = Number(process.argv[7])
+      var margin = isFinite(marginArg) && marginArg > 0 ? marginArg : DEFAULT_RECHARGE_MARGIN_PERCENT
+      var fold = stored ? stored.fold : newActivityState()
+      var list = parseObservations(input)
+      for (var i = 0; i < list.length; i++) foldActivity(fold, list[i], margin)
+      var next = {
+        version: ACTIVITY_STATE_VERSION,
+        dbInode: dbInode,
+        lastEpoch: Number(process.argv[8]),
+        rowCount: Number(process.argv[9]),
+        fold: fold
+      }
+      var tmp = stateFile + ".tmp"
+      fs.writeFileSync(tmp, JSON.stringify(next))
+      fs.renameSync(tmp, stateFile)
+      printSummary(finishActivity(fold, Number(process.argv[5]), isFinite(uptimeArg) && uptimeArg > 0 ? uptimeArg : null))
+    })
+  }
 }
